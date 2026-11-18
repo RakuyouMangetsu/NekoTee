@@ -223,7 +223,10 @@ void Mirror::read_flow() {
     }
 }
 
-std::size_t Mirror::write_once(std::string_view bytes) {
+std::size_t Mirror::submit(std::string_view bytes) {
+    if (bytes.empty() || !can_submit()) {
+        return 0;
+    }
     const ssize_t count = write(fd(), bytes.data(), bytes.size());
     if (count > 0) {
         return static_cast<std::size_t>(count);
@@ -234,26 +237,21 @@ std::size_t Mirror::write_once(std::string_view bytes) {
     return 0;
 }
 
-std::size_t Mirror::offer(std::string_view bytes, SendPolicy policy) {
-    const auto size = bytes.size();
+void Mirror::offer_best_effort(std::string_view bytes) {
     if (bytes.empty() || fd() < 0) {
-        return size;
+        return;
     }
-    if (can_submit() && pending_.empty()) {
-        bytes.remove_prefix(write_once(bytes));
+    if (pending_.empty()) {
+        bytes.remove_prefix(submit(bytes));
     }
-    if (fd() >= 0 && policy == SendPolicy::backpressure) {
-        return size - bytes.size() + pending_.append(bytes);
-    }
-    if (fd() >= 0 && pending_.capacity() && policy == SendPolicy::drop_oldest) {
-        enqueue(bytes);
+    if (fd() >= 0 && pending_.capacity()) {
+        append_drop_oldest(bytes);
     } else {
         dropped_ += bytes.size();
     }
-    return size;
 }
 
-void Mirror::enqueue(std::string_view bytes) {
+void Mirror::append_drop_oldest(std::string_view bytes) {
     if (bytes.size() > pending_.free()) {
         const auto excess = bytes.size() - pending_.free();
         const auto old = std::min(excess, pending_.size());
@@ -265,12 +263,33 @@ void Mirror::enqueue(std::string_view bytes) {
     pending_.append(bytes);
 }
 
-void Mirror::flush() {
-    if (can_submit() && queued()) {
-        const auto count = write_once(pending_.front());
-        if (count > 0) {
-            pending_.consume(count);
-        }
+std::size_t Mirror::flush(std::size_t budget) {
+    if (!queued()) {
+        return 0;
+    }
+    const auto count = submit(pending_.front().substr(0, budget));
+    if (count) {
+        pending_.consume(count);
+    }
+    return count;
+}
+
+Mirror::DriverOutput Mirror::driver_output() const {
+    if (fd() < 0) {
+        return {};
+    }
+    int bytes = 0;
+    if (ioctl(fd(), TIOCOUTQ, &bytes) == 0 && bytes > 0) {
+        return {static_cast<std::size_t>(bytes), true};
+    }
+    // Some serial drivers can also report whether the transmitter itself is empty.
+    int status = 0;
+    return {0, ioctl(fd(), TIOCSERGETLSR, &status) == 0 && !(status & TIOCSER_TEMT)};
+}
+
+void Mirror::discard_driver_output() noexcept {
+    if (fd() >= 0) {
+        ioctl(fd(), TCFLSH, TCOFLUSH);
     }
 }
 

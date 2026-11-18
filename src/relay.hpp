@@ -10,13 +10,14 @@ class Session;
 class Signals;
 class Mirror;
 
-inline constexpr double unbuffered_rate_fraction = 0.99;
-
 struct RelayOptions {
-    std::optional<std::chrono::milliseconds> wait{std::chrono::milliseconds{500}};
-    bool limit = false;
+    std::optional<std::chrono::milliseconds> wait;
+    bool limit = true;
+    unsigned int rate_percent = 99;
     unsigned int resume_percent = 50;
     bool chinese = false;
+
+    double byte_rate(double wire_rate) const { return wire_rate * rate_percent / 100; }
 };
 
 int relay(Terminal& terminal, Session& session, const Signals& signals, Mirror& mirror,

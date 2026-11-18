@@ -9,11 +9,15 @@
 
 namespace neko {
 
-enum class Flow { soft, hard };
-enum class SendPolicy { drop_oldest, backpressure, immediate };
+enum class Flow { soft, hard, none };
 
 class Mirror {
 public:
+    struct DriverOutput {
+        std::size_t queued = 0;
+        bool busy = false;
+    };
+
     Mirror(const std::string& device, std::size_t capacity, std::optional<Flow> flow);
     ~Mirror();
 
@@ -31,9 +35,12 @@ public:
     bool software_flow() const { return flow_ == Flow::soft; }
     bool can_submit() const { return fd() >= 0 && !peer_paused_; }
     void read_flow();
-    // When retaining old data, return how much of the new batch was consumed.
-    std::size_t offer(std::string_view bytes, SendPolicy policy);
-    void flush();
+    std::size_t append(std::string_view bytes) { return pending_.append(bytes); }
+    std::size_t submit(std::string_view bytes);
+    void offer_best_effort(std::string_view bytes);
+    std::size_t flush(std::size_t budget);
+    DriverOutput driver_output() const;
+    void discard_driver_output() noexcept;
     void fail(int error);
     void discard_pending(std::size_t staged = 0);
     int error() const { return error_; }
@@ -42,8 +49,7 @@ public:
 private:
     struct PortSettings;
     void restore() noexcept;
-    std::size_t write_once(std::string_view bytes);
-    void enqueue(std::string_view bytes);
+    void append_drop_oldest(std::string_view bytes);
 
     Fd fd_;
     std::unique_ptr<PortSettings> port_;

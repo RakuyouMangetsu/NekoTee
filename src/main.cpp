@@ -48,16 +48,19 @@ void help() {
   --baud RATE       | 设备原设置   | 十进制正整数，不带单位，如 115200
   --frame FORMAT    | 设备原设置*  | 如 8N1 或 7E1；数据位 5–8、校验 N/E/O、
                     |              | 停止位 1 或 2，N/E/O 分别为无/偶/奇校验
-  --buffer [N]      | 128 kbytes   | 待发队列；0–65536，1 kbyte = 1024 字节
-                    |              | 不带 N 使用 128；也可写 --buffer=N
-  --wait MS         | 500 ms       | PTY 退出后的队列等待时间；0 不等，-1 不限时
-  --limit           | 关闭         | 按串口速率和队列余量限制原端；0 队列时固定限速
-  --flow soft|hard  | 见下方*      | 镜像串口握手：soft 为 XON/XOFF，hard 为 RTS/CTS
-  --resume PCT      | 50%          | 有队列时 --limit 的恢复水位（0–99，不带 %）
+  --buffer [N]      | 128 KiB      | 待发队列（0–65536 KiB）；0 不设队列
+                    |              | 1 KiB = 1024 字节；不带 N 使用 128
+                    |              | 也可写 --buffer=N
+  --limit           | 开启         | 启用限速和背压
+  --no-limit        | 关闭         | 不让镜像拖慢原端；队列满时丢弃最旧数据
+  --rate PCT        | 99%          | 限速目标，占标称链路字节速率的百分比（1–100）
+  --flow MODE       | soft*        | soft：XON/XOFF；hard：RTS/CTS；none：关闭
+  --resume PCT      | 50%          | 有队列时的背压恢复水位（0–99）
+  --wait MS         | -1（不限时） | 退出等待（毫秒）；0 不等；Ctrl+C 可取消
   -h, --help        |              | 显示帮助，不启动会话；无参数同理
 
-* 指定 --baud 但不指定 --frame 时用 8N1。未指定 --flow 时：有 --limit 则用
-  soft；否则，指定 --baud 时关闭串口流控，未指定 --baud 时保留设备设置。
+* 指定 --baud 但不指定 --frame 时用 8N1。使用 --no-limit 且未指定 --flow 时，
+  若指定了 --baud 则关闭串口流控，否则保留设备设置。百分比不带 % 符号。
   可用波特率由设备和驱动决定。驱动拒绝或回读速率不符时，不启动会话。
   回读一致只表示驱动报告该设置，不保证线路能按该速率正常通信。
 
@@ -67,18 +70,17 @@ void help() {
   取样：LF 真正换行时，提取光标所在行的可见文字（含提示符、命令，合并自动折行），
         输出 UTF-8 和 CRLF。不复制换行前清除的内容、原始按键、无回显输入、样式、
         控制序列或未换行的末行。主动打印的敏感文字仍可能出现。
-  发送：无积压立即尝试写入。不启用 --limit 时，队列满则丢最旧的数据；
-        此时 --buffer 0 不排队，写不进的字节直接丢弃。
-  限速：--limit 有队列时，队列越满越慢，达到 100% 暂停读取 PTY，降到恢复
-        水位后继续；暂停时显示还需处理的字节数。--limit --buffer 0 不设水位，
-        按链路字节速率（波特率除以帧位数）的 99% 读取，当前批次写不完则等候，
-        不读下一批。--flow 只设置镜像串口握手，soft 响应对端 XOFF/XON，
-        hard 需要接通 RTS/CTS，PTY 本身没有这些引脚。
-  退出：显示剩余待发字节；--wait 到时丢弃剩余数据，也可按 Ctrl-C 取消等待。
-        正常退出保留 shell 的退出码。待发字节不包括驱动已接受的数据，
-        写入成功不代表远端已收到。
+  限速：按过滤后的字节计量，目标为（回读波特率 ÷ 帧位数）×（--rate ÷ 100）。
+        速率和有无队列无关；有数据且可发就发，不等队列攒满。
+  背压：队列吸收短时阻塞。满 100% 暂停读取 PTY，降到 --resume 后继续，
+        暂停时显示还需发送的字节数。--buffer 0 只暂存当前批次的待发尾段。
+        --no-limit --buffer 0 则直接丢弃不能立即写入的数据。
+        soft 响应对端 XOFF/XON，hard 需要接通 RTS/CTS。
+  退出：默认等应用队列和驱动可报告的待发数据排空；Ctrl+C 强制结束（退出码 130）。
+        --wait 到时不再提交未发数据。正常退出保留 shell 的退出码。
+        驱动排空不等于对端确认收到。
 
-示例：nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1 --limit --wait -1
+示例：nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1
 )HELP" : R"HELP(Usage: nekotee --mirror DEVICE [OPTIONS]
 
   Option            | Default       | Description
@@ -89,16 +91,20 @@ void help() {
   --baud RATE       | device        | Positive decimal baud, no unit, e.g. 115200
   --frame FORMAT    | device*       | E.g. 8N1 or 7E1: 5-8 data bits, N/E/O parity
                     |               | (none/even/odd), 1 or 2 stop bits
-  --buffer [N]      | 128 kbytes    | Send queue; 0-65536, 1 kbyte = 1024 bytes
-                    |               | No N means 128. Also: --buffer=N
-  --wait MS         | 500 ms        | Queue wait at PTY exit; 0 skips, -1 is unlimited
-  --limit           | off           | Pace PTY reads; fixed rate with --buffer 0
-  --flow soft|hard  | see below*    | Mirror handshake: XON/XOFF or RTS/CTS
-  --resume PCT      | 50%           | Buffered pacing resume level (0-99, no % sign)
+  --buffer [N]      | 128 KiB       | Send queue (0-65536 KiB); 0 disables it
+                    |               | 1 KiB = 1024 bytes; no N means 128
+                    |               | Also accepts --buffer=N
+  --limit           | on            | Enable pacing and PTY backpressure
+  --no-limit        | off           | Keep the PTY fast; drop oldest when the queue fills
+  --rate PCT        | 99%           | Target as a percentage of nominal link byte rate (1-100)
+  --flow MODE       | soft*         | soft: XON/XOFF; hard: RTS/CTS; none: off
+  --resume PCT      | 50%           | Backpressure resume level with a queue (0-99)
+  --wait MS         | -1 (no limit) | Exit wait in milliseconds; 0 skips; Ctrl+C cancels
   -h, --help        |               | Show help without a session (also with no args)
 
-* --baud without --frame uses 8N1. Without --flow, --limit selects soft;
-  otherwise --baud disables serial flow control, or the device setting is kept.
+* --baud without --frame uses 8N1. With --no-limit and no explicit --flow,
+  --baud disables serial flow control; otherwise the device setting is kept.
+  Enter percentages without a % sign.
   Available baud rates depend on the device and driver. A rejected setting or a
   different rate reported by the driver prevents startup. Readback does not
   verify that the link works at that rate.
@@ -111,19 +117,18 @@ How it works:
            commands), joining soft wraps and ending in CRLF. No erased suggestions,
            raw keys, no-echo input, styles, controls, or unterminated last line.
            This is a text transcript; secrets printed by a program can still appear.
-  Sending: Try writes immediately when the queue is empty. Without --limit, a full
-           queue drops the oldest unsent bytes, or with --buffer 0 drops bytes that
-           cannot be written at once.
-  Pacing:  With --limit and a queue, read more slowly as it fills. At 100%, pause
-           until the resume level and report the bytes left to get there. With
-           --limit --buffer 0, read at 99% of the link byte rate (baud / frame bits)
-           and finish writing each batch before reading more. There are no watermarks.
-           --flow sets the mirror link: soft honors peer XOFF/XON, hard needs RTS/CTS.
-  Exit:    Report queued bytes, then drop any remainder at the --wait deadline.
-           Ctrl-C cancels the wait. Preserve the shell status on normal exit. Bytes
-           already accepted by the driver are not in the count or confirmed delivered.
+  Pacing:  Count filtered bytes. Target = (reported baud / frame bits) * (--rate / 100),
+           with or without a queue. Send as soon
+           as the byte budget and device allow; there is no minimum fill level.
+  Pressure: The queue absorbs short stalls. Pause PTY reads at 100% until --resume;
+           print the bytes left to send before resuming. With --buffer 0, keep only
+           the current batch's unsent suffix. With --no-limit --buffer 0, drop it.
+           Soft flow honors peer XOFF/XON; hard needs RTS/CTS wiring.
+  Exit:    Wait for the send queue and driver-reported output by default. Ctrl+C
+           cancels (exit 130). A --wait deadline stops submission and drops unsent bytes.
+           Normal exit preserves the shell status. Drained does not mean received.
 
-Example: nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1 --limit --wait -1
+Example: nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1
 )HELP");
 }
 
@@ -168,13 +173,17 @@ void session_start_message(const Options& options, const std::string& shell,
         std::cerr << (zh ? "不限时" : "unlimited");
     }
     std::cerr << '\n' << (zh ? "  原端限速：" : "  PTY pacing: ");
-    if (options.relay.limit && options.buffer == 0) {
-        std::cerr << (zh ? "开启，固定 " : "on, fixed at ")
-                  << mirror.wire_bytes_per_second() * neko::unbuffered_rate_fraction
-                  << (zh ? " 字节/秒，无队列水位" : " B/s, no queue watermarks");
-    } else if (options.relay.limit) {
-        std::cerr << (zh ? "开启，100% 暂停，" : "on, pause at 100%, resume at ")
-                  << options.relay.resume_percent << '%' << (zh ? " 恢复" : "");
+    if (options.relay.limit) {
+        std::cerr << (zh ? "开启，" : "on, ")
+                  << options.relay.byte_rate(mirror.wire_bytes_per_second())
+                  << (zh ? " 字节/秒（标称线速的 " : " B/s (") << options.relay.rate_percent
+                  << (zh ? "%）" : "% of nominal link rate)");
+        if (options.buffer) {
+            std::cerr << (zh ? "，100% 暂停，" : ", pause at 100%, resume at ")
+                      << options.relay.resume_percent << '%' << (zh ? " 恢复" : "");
+        } else {
+            std::cerr << (zh ? "，无队列水位" : ", no queue watermarks");
+        }
     } else {
         std::cerr << (zh ? "关闭" : "off");
     }
@@ -235,14 +244,23 @@ Options parse(int argc, char** argv) {
             options.relay.wait = parse_wait(value(true));
         } else if (arg == "--limit") {
             options.relay.limit = true;
+        } else if (arg == "--no-limit") {
+            options.relay.limit = false;
+        } else if (arg == "--rate") {
+            options.relay.rate_percent = parse_number(value(), "--rate");
+            if (!options.relay.rate_percent || options.relay.rate_percent > 100) {
+                throw std::invalid_argument("--rate must be between 1 and 100");
+            }
         } else if (arg == "--flow") {
             const auto flow = value();
             if (flow == "soft") {
                 options.flow = neko::Flow::soft;
             } else if (flow == "hard") {
                 options.flow = neko::Flow::hard;
+            } else if (flow == "none") {
+                options.flow = neko::Flow::none;
             } else {
-                throw std::invalid_argument("--flow must be soft or hard");
+                throw std::invalid_argument("--flow must be soft, hard or none");
             }
         } else if (arg == "--resume") {
             options.relay.resume_percent = parse_number(value(), "--resume");

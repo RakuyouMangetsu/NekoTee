@@ -197,7 +197,8 @@ class RelayTests(unittest.TestCase):
                 noargs = subprocess.check_output([BINARY], env=env)
                 self.assertIn(expected.encode(), noargs)
                 for option in (b"--buffer [N]", b"--frame FORMAT", b"--baud 115200",
-                               b"--wait MS", b"--limit", b"--flow soft|hard", b"--resume PCT"):
+                               b"--wait MS", b"--limit", b"--no-limit", b"--rate PCT",
+                               b"--flow MODE", b"--resume PCT"):
                     self.assertIn(option, noargs)
                 self.assertNotIn(b"--mirror-priority", noargs)
                 self.assertEqual(noargs, subprocess.check_output([BINARY, "--help"], env=env))
@@ -218,7 +219,7 @@ class RelayTests(unittest.TestCase):
                 with Session("--baud", str(baud), "--buffer", "0", "--limit") as s:
                     s.start()
                     self.assertIn(f"Link: {baud} baud, 8N1".encode(), s.local)
-                    self.assertIn(f"PTY pacing: on, fixed at {baud / 10 * 0.99:g} B/s".encode(), s.local)
+                    self.assertIn(f"PTY pacing: on, {baud / 10 * 0.99:g} B/s".encode(), s.local)
                     self.assertEqual(s.finish(), 0)
                     s.until(EXIT_TEXT, mirror=True)
                     self.assertEqual(s.mirror, EXIT_TEXT)
@@ -226,7 +227,7 @@ class RelayTests(unittest.TestCase):
 
     def test_reject_invalid_queue_settings(self):
         for args in (("--wait", "-2"), ("--wait", "2147483648"), ("--wait", "1s"),
-                     ("--flow", "invalid"),
+                     ("--flow", "invalid"), ("--rate", "0"), ("--rate", "101"), ("--rate", "99%"),
                      ("--resume", "-1"), ("--resume", "100"), ("--mirror-priority",)):
             with self.subTest(args=args):
                 result = subprocess.run([BINARY, "--mirror", "/dev/null", *args], capture_output=True)
@@ -241,8 +242,9 @@ class RelayTests(unittest.TestCase):
             self.assertIn(start, s.local)
             self.assertLess(s.local.index(start), s.local.index(b"PS> "))
             self.assertIn(os.fsencode(os.ttyname(s.mirror_slave)) + b"; shell: /bin/bash", s.local)
-            self.assertIn(b"Queue: 128 KiB; exit wait: 500 ms", s.local)
-            self.assertIn(b"PTY pacing: off", s.local)
+            self.assertIn(b"XON/XOFF (TX, user space)", s.local)
+            self.assertIn(b"Queue: 128 KiB; exit wait: unlimited", s.local)
+            self.assertIn(b"99% of nominal link rate), pause at 100%, resume at 50%", s.local)
             self.assertEqual(s.finish(b"exit 37\n"), 37)
             self.assertIn(end, s.local)
             self.assertNotIn(start, s.mirror)
@@ -251,14 +253,25 @@ class RelayTests(unittest.TestCase):
             self.assertNotIn(b"bytes queued", s.mirror)
 
     def test_startup_reports_effective_settings_in_chinese(self):
-        with Session("--baud", "115200", "--frame", "8N2", "--limit", "--wait", "-1",
+        with Session("--baud", "115200", "--frame", "8N2", "--rate", "80", "--wait", "-1",
                      "--resume", "25", "--buffer", "1", locale="zh_CN.UTF-8") as s:
             s.start()
             for text in ("PTY 会话已启动", "115200 baud, 8N2; XON/XOFF (发送，程序处理)",
-                         "队列：1 KiB；退出等待：不限时", "原端限速：开启，100% 暂停，25% 恢复"):
+                         "队列：1 KiB；退出等待：不限时",
+                         "原端限速：开启，8378.18 字节/秒（标称线速的 80%），100% 暂停，25% 恢复"):
                 self.assertIn(text.encode(), s.local)
                 self.assertNotIn(text.encode(), s.mirror)
             self.assertEqual(s.finish(), 0)
+
+    def test_flow_none_does_not_disable_pacing(self):
+        with Session("--flow", "none", "--no-limit", "--limit") as s:
+            s.start()
+            self.assertIn(b"no serial flow control", s.local)
+            self.assertIn(b"PTY pacing: on", s.local)
+            os.write(s.mirror_master, b"\x13")
+            self.assertEqual(s.finish(), 0)
+            s.until(EXIT_TEXT, mirror=True)
+            self.assertEqual(s.mirror, EXIT_TEXT)
 
     def test_hardware_flow_rejects_a_pty(self):
         with Session("--limit", "--flow", "hard") as s:
@@ -376,7 +389,7 @@ class RelayTests(unittest.TestCase):
                 self.assertEqual(termios.tcgetattr(s.local_slave), s.original)
 
     def test_zero_buffer_does_not_keep_backlog(self):
-        with Session("--buffer", "0") as s:
+        with Session("--no-limit", "--buffer", "0") as s:
             self.cat_burst(s)
             self.assertEqual(s.finish(read_mirror=False), 0)
             s.pump()
@@ -386,7 +399,7 @@ class RelayTests(unittest.TestCase):
 
     def test_cat_burst_keeps_newest_data(self):
         for size, buffer in ((128, ()), (1, ("--buffer=1",))):
-            with self.subTest(size=size), Session(*buffer) as s:
+            with self.subTest(size=size), Session("--no-limit", *buffer) as s:
                 output, _ = self.cat_burst(s)  # The local cat must finish with no mirror reads.
                 s.until(CAT_END, mirror=True)
                 self.assertIn(output[-size * 1024:], s.mirror)
@@ -395,7 +408,7 @@ class RelayTests(unittest.TestCase):
                 self.assertGreater(self.check_cat_mirror(s, output), 0)
 
     def test_buffer_flag_without_size(self):
-        with Session("--buffer") as s:
+        with Session("--no-limit", "--buffer") as s:
             output, _ = self.cat_burst(s, 1600)
             s.until(CAT_END, mirror=True)
             self.assertEqual(s.finish(), 0)
@@ -403,8 +416,8 @@ class RelayTests(unittest.TestCase):
             self.assertEqual(self.check_cat_mirror(s, output), 0)
 
     def test_exit_wait_deadline_with_stalled_mirror(self):
-        for wait, options in ((0, ("--wait", "0")), (180, ("--wait", "180")), (500, ())):
-            with self.subTest(wait=wait), Session(*options) as s:
+        for wait in (0, 180, 500):
+            with self.subTest(wait=wait), Session("--no-limit", "--wait", str(wait)) as s:
                 self.cat_burst(s)
                 start = time.monotonic()
                 self.assertEqual(s.finish(b"exit 37\n", read_mirror=False), 37)
@@ -415,34 +428,58 @@ class RelayTests(unittest.TestCase):
                 self.assertIn(b"dropped", s.local)
 
     def test_unlimited_exit_wait_is_cancellable(self):
-        with Session("--wait", "-1") as s:
-            self.cat_burst(s)
-            s.send(b"exit\n")
-            deadline = time.monotonic() + 2
-            while termios.tcgetattr(s.local_slave) != s.original:
-                self.assertLess(time.monotonic(), deadline, "local terminal did not restore on exit")
-                s.pump(read_mirror=False)
-            s.until(b"bytes queued", read_mirror=False)
+        with Session() as s:
+            s.start()
+            os.write(s.mirror_master, b"\x13")
+            s.send(b"printf 'short-payload\\n'; exit\n")
+            s.until(b"short-payload\r\n")
+            s.until(b"Waiting for mirror;")
+            time.sleep(0.65)
             self.assertIsNone(s.process.poll())
-            self.assertEqual(s.finish(b"\x03", read_mirror=False), 128 + signal.SIGINT)
+            self.assertEqual(s.finish(b"\x03", timeout=1), 128 + signal.SIGINT)
             self.assertIn(b"dropped", s.local)
+            self.assertEqual(termios.tcgetattr(s.local_slave), s.original)
+            self.assertEqual(termios.tcgetattr(s.mirror_slave), s.mirror_original)
 
     def test_unlimited_exit_wait_drains_when_mirror_returns(self):
-        with Session("--wait", "-1") as s:
-            output, _ = self.cat_burst(s)
+        with Session("--baud", "1000000") as s:
+            s.start()
+            os.write(s.mirror_master, b"\x13")
+            output, _ = self.cat_burst(s, 600)
             s.send(b"exit\n")
-            deadline = time.monotonic() + 5
-            while termios.tcgetattr(s.local_slave) != s.original:
-                self.assertLess(time.monotonic(), deadline, "local terminal did not restore on exit")
-                s.pump(read_mirror=False)
-            deadline = time.monotonic() + 0.65
-            while time.monotonic() < deadline:
-                s.pump(read_mirror=False)
+            s.until(b"Waiting for mirror;")
+            time.sleep(0.65)
             self.assertIsNone(s.process.poll())
+            self.assertEqual(s.mirror, b"")
+            os.write(s.mirror_master, b"\x11")
             self.assertEqual(s.finish(None), 0)
             s.until(EXIT_TEXT, mirror=True)
             self.assertIn(b"Mirror: 0 bytes queued.", s.local)
-            self.assertGreater(self.check_cat_mirror(s, output), 0)
+            self.assertEqual(self.check_cat_mirror(s, output), 0)
+
+    def test_pacing_uses_filtered_bytes_at_the_same_rate_with_or_without_queue(self):
+        for buffer in (0, 128):
+            with self.subTest(buffer=buffer), Session("--baud", "19200", "--rate", "50",
+                                                      "--buffer", str(buffer)) as s:
+                s.start()
+                output = self.write_burst(s, 20)
+                path = Path(s.home.name, "burst.txt")
+                # 9 KiB of SGR before the first visible line does not consume the serial budget.
+                path.write_bytes(b"\x1b[31m\x1b[0m" * 1024 + path.read_bytes())
+                start = time.monotonic()
+                s.send(CAT_COMMAND)
+                s.until(CAT_END, timeout=3)
+                local_elapsed = time.monotonic() - start
+                s.until(CAT_END, mirror=True, timeout=1)
+                mirror_elapsed = time.monotonic() - start
+                nominal = len(output) / 960  # 19200 baud, 8N1, 50%.
+                self.assertGreaterEqual(local_elapsed, nominal - 0.08)
+                self.assertLess(mirror_elapsed, nominal + 0.75)
+                self.assertLess(mirror_elapsed - local_elapsed, 0.25)
+                self.assertNotIn(b"PTY reads paused;", s.local)
+                self.assertEqual(s.finish(), 0)
+                s.until(EXIT_TEXT, mirror=True)
+                self.assertEqual(self.check_cat_mirror(s, output), 0)
 
     def test_pacing_preserves_a_line_larger_than_the_queue(self):
         with Session("--limit", "--buffer", "1", "--resume", "25", "--wait", "-1",
@@ -515,7 +552,7 @@ class RelayTests(unittest.TestCase):
                         self.assertNotIn(b"from-serial-must-not-reach-shell", s.local)
                         self.assertNotIn(b"\x1b", s.mirror)
                     self.assertEqual(termios.tcgetattr(port), original)
-                    with Session("--frame", "8N2", device=sender, peer=peer) as s:
+                    with Session("--frame", "8N2", "--no-limit", device=sender, peer=peer) as s:
                         s.start()
                         attrs = termios.tcgetattr(port)
                         self.assertEqual(attrs[4:6], original[4:6])
@@ -534,12 +571,12 @@ class RelayTests(unittest.TestCase):
     @unittest.skipUnless(SERIAL_TX and SERIAL_RX, "set NEKOTEE_SERIAL_TX and NEKOTEE_SERIAL_RX")
     def test_hardware_serial_cat_burst(self):
         self.assertFalse(os.path.samefile(SERIAL_TX, SERIAL_RX), "use distinct serial ports")
-        modes = (("default", (), 3500, False),
-                 ("zero buffer", ("--buffer", "0"), 3500, False),
-                 ("no exit wait", ("--buffer", "256", "--wait", "0"), 3500, False),
-                 ("1500 ms wait", ("--buffer", "256", "--wait", "1500"), 3500, False),
-                 ("unlimited wait, 256 KiB", ("--wait", "-1", "--buffer", "256"), 3500, True),
-                 ("paced, 8 KiB", ("--limit", "--wait", "-1", "--buffer", "8"), 1000, True))
+        modes = (("default", (), 3500, True),
+                 ("unpaced, zero buffer", ("--no-limit", "--buffer", "0"), 3500, False),
+                 ("unpaced, no exit wait", ("--no-limit", "--buffer", "256", "--wait", "0"), 3500, False),
+                 ("unpaced, 1500 ms wait", ("--no-limit", "--buffer", "256", "--wait", "1500"), 3500, False),
+                 ("unpaced, unlimited wait", ("--no-limit", "--buffer", "256"), 3500, True),
+                 ("paced, 8 KiB", ("--buffer", "8"), 1000, True))
         # Use the same speed and framing before, during, and after the process,
         # so restoring termios at exit cannot cut a byte in flight at a different rate.
         with serial_115200(SERIAL_TX), serial_115200(SERIAL_RX) as peer:
@@ -554,18 +591,17 @@ class RelayTests(unittest.TestCase):
                         output = self.write_burst(s, count)
                         started = time.monotonic()
                         s.send(CAT_COMMAND)
-                        s.until(CAT_END, timeout=12)
+                        s.until(CAT_END, timeout=35)
                         elapsed = time.monotonic() - started
-                        if "--limit" not in flags:
-                            self.assertIn(output, s.local)
+                        self.assertIn(output, s.local)
                         status = s.finish(timeout=25)
                         self.collect_serial_tail(s)
                         dropped = self.check_cat_mirror(s, output, label=f"{label}, local {elapsed:.3f}s")
                         self.assertEqual(status, 0)
                         self.assertEqual(dropped == 0, intact)
                         received_counts[label] = len(s.mirror)
-            if {"1500 ms wait", "no exit wait"} <= received_counts.keys():
-                self.assertGreater(received_counts["1500 ms wait"], received_counts["no exit wait"])
+            if {"unpaced, 1500 ms wait", "unpaced, no exit wait"} <= received_counts.keys():
+                self.assertGreater(received_counts["unpaced, 1500 ms wait"], received_counts["unpaced, no exit wait"])
 
     @unittest.skipUnless(SERIAL_TX and SERIAL_RX, "set NEKOTEE_SERIAL_TX and NEKOTEE_SERIAL_RX")
     def test_hardware_serial_zero_buffer_pacing(self):
@@ -575,8 +611,9 @@ class RelayTests(unittest.TestCase):
             with Session("--baud", "115200", "--frame", "8N1", "--limit", "--buffer", "0",
                          device=SERIAL_TX, peer=peer) as s:
                 s.start()
-                self.assertIn(b"Queue: 0 KiB; exit wait: 500 ms", s.local)
-                self.assertIn(b"PTY pacing: on, fixed at 11404.8 B/s, no queue watermarks", s.local)
+                self.assertIn(b"Queue: 0 KiB; exit wait: unlimited", s.local)
+                self.assertIn(b"PTY pacing: on, 11404.8 B/s (99% of nominal link rate), no queue watermarks",
+                              s.local)
                 output = self.write_burst(s, 1000)
                 started = time.monotonic()
                 s.send(CAT_COMMAND)
@@ -645,6 +682,34 @@ class RelayTests(unittest.TestCase):
                 self.collect_serial_tail(s)
                 self.assertNotIn(b"mirror-input-must-be-ignored", s.local)
                 self.assertEqual(self.check_cat_mirror(s, output, label=f"XOFF/XON, {int(report)} bytes to resume"), 0)
+
+    @unittest.skipUnless(SERIAL_TX and SERIAL_RX, "set NEKOTEE_SERIAL_TX and NEKOTEE_SERIAL_RX")
+    def test_hardware_serial_interrupt_exit_wait(self):
+        self.assertFalse(os.path.samefile(SERIAL_TX, SERIAL_RX), "use distinct serial ports")
+        with serial_115200(SERIAL_TX) as port, serial_115200(SERIAL_RX) as peer:
+            original = termios.tcgetattr(port)
+            termios.tcflush(peer, termios.TCIFLUSH)
+            with Session(device=SERIAL_TX, peer=peer) as s:
+                s.start()
+                s.send(b"echo serial-ready\n")
+                s.until(b"\r\nserial-ready\r\n", mirror=True)
+                s.mirror.clear()
+                os.write(peer, b"\x13")
+                termios.tcdrain(peer)
+                time.sleep(0.1)
+                s.send(b"printf 'short-payload\\n'; exit\n")
+                s.until(b"Waiting for mirror;")
+                time.sleep(0.65)
+                self.assertIsNone(s.process.poll())
+                started = time.monotonic()
+                status = s.finish(b"\x03", timeout=1)
+                self.assertEqual(status, 128 + signal.SIGINT)
+                self.assertEqual(s.mirror, b"")
+                self.assertIn(b"dropped", s.local)
+                self.assertEqual(termios.tcgetattr(s.local_slave), s.original)
+                self.assertEqual(termios.tcgetattr(port), original)
+                print(f"Peer XOFF held through exit; Ctrl+C returned {status} in "
+                      f"{time.monotonic() - started:.3f}s", flush=True)
 
     @unittest.skipUnless(SERIAL_TX and SERIAL_RX, "set NEKOTEE_SERIAL_TX and NEKOTEE_SERIAL_RX")
     def test_hardware_serial_rtscts_configuration(self):

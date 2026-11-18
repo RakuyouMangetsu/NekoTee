@@ -1,0 +1,25 @@
+NEKOTEE DEFAULT PACING REGRESSION - 2026-11-18
+Release build. Sender /dev/ttyUSB0, receiver /dev/ttyACM0, 115200 baud, 8N1.
+No CTS/RTS wires; the hardware-flow test checks driver configuration only.
+
+Defaults: 99% of 11520 B/s, 128 KiB, software flow, resume at 50%, unlimited exit wait.
+CTest: 27 tests passed (including the socat virtual serial pair); 5 physical cases run separately.
+Physical suite: 5 passed in 65.759 s.
+
+Cat burst results (PTY time ends at the end-of-cat marker; waits in ms):
+Received counts include prompt, command and exit text.
+Mode                         PTY time  Received/expected  Intact rows  Malformed  Dropped   Exit
+Default                      20.862 s      238046/238046    3500/3500          0        0      0
+No limit, no buffer           0.059 s        4819/238046      61/3500          1   233227      0
+No limit, 256 KiB, wait 0      0.052 s        4211/238046      61/3500          1   233835      0
+No limit, 256 KiB, wait 1500   0.061 s       19923/238046     292/3500          1   218123      0
+No limit, 256 KiB, wait -1     0.053 s      238046/238046    3500/3500          0        0      0
+Limited, 8 KiB                5.960 s        68046/68046    1000/1000          0        0      0
+
+Limited, zero buffer: 68046/68046 bytes, 1000/1000 intact rows, zero malformed or dropped.
+Timed payload (68011 bytes): PTY 5.960 s, 11411 B/s; serial 5.963 s, 11405 B/s (both 99.0%).
+
+XOFF/XON with a 4 KiB queue and 25% resume: no bytes received while paused; reported 3075 bytes to resume.
+After XON: 40846/40846 bytes, 600/600 intact rows, zero malformed or dropped.
+Exit with default settings and peer XOFF: remained waiting after 650 ms; Ctrl+C returned
+130 in 0.041 s, with both terminal and serial settings restored.
