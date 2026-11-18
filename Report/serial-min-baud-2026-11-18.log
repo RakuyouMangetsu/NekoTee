@@ -1,0 +1,190 @@
+NEKOTEE PHYSICAL MINIMUM-BAUD CONNECTIVITY PROBE (no relay, 8N1)
+2026-11-18T21:17:53.520366+08:00
+USB: /dev/serial/by-id/usb-1a86_USB2.0-Ser_-if00-port0 -> /dev/ttyUSB0
+ACM: /dev/serial/by-id/usb-SIPEED_UARTx4_HS_FactoryAIOT_Prog_Serial-if00 -> /dev/ttyACM0
+Raw, no flow control; 12 bytes per direction, one direction at a time.
+Pass requires exact bytes and requested rate readback on both ports.
+Each receive window is nominal wire time + 250 ms, at least 300 ms.
+standard     baud=   50 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01320055aa00817fe718fe rx_head=00000000000000000000000000000000
+standard     baud=   50 trial=1 ACM->USB rx=  1/12 exact=no expected=4f01320055aa00817fe718fe rx_head=ff
+  readback RX/TX=[(50, 50), (50, 50)]; FAIL
+control      baud=19200 trial=1 USB->ACM rx= 12/12 exact=yes
+control      baud=19200 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(19200, 19200), (19200, 19200)]; PASS
+standard     baud=  300 trial=1 USB->ACM rx= 29/12 exact=no expected=4e012c0155aa00817fe718fe rx_head=00000000000000000000000000000000
+standard     baud=  300 trial=1 ACM->USB rx=  1/12 exact=no expected=4f012c0155aa00817fe718fe rx_head=ff
+  readback RX/TX=[(300, 300), (300, 300)]; FAIL
+standard     baud= 1800 trial=1 USB->ACM rx= 12/12 exact=yes
+standard     baud= 1800 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1800, 1800), (1800, 1800)]; PASS
+standard     baud=  600 trial=1 USB->ACM rx= 29/12 exact=no expected=4e01580255aa00817fe718fe rx_head=00000000000000000000000000000000
+standard     baud=  600 trial=1 ACM->USB rx=  0/12 exact=no expected=4f01580255aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(600, 600), (600, 600)]; FAIL
+standard     baud= 1200 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01b00455aa00817fe718fe rx_head=00000000000000000000000000000000
+standard     baud= 1200 trial=1 ACM->USB rx=  0/12 exact=no expected=4f01b00455aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(1200, 1200), (1200, 1200)]; FAIL
+standard-scan baud=   75 trial=1 USB->ACM rx= 29/12 exact=no expected=4e014b0055aa00817fe718fe rx_head=00000000000000000000000000000000
+standard-scan baud=   75 trial=1 ACM->USB rx=  0/12 exact=no expected=4f014b0055aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(75, 75), (75, 75)]; FAIL
+standard-scan baud=  110 trial=1 USB->ACM rx= 28/12 exact=no expected=4e016e0055aa00817fe718fe rx_head=00000000000000000000000000000000
+standard-scan baud=  110 trial=1 ACM->USB rx=  0/12 exact=no expected=4f016e0055aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(110, 110), (110, 110)]; FAIL
+standard-scan baud=  134 trial=1 USB->ACM rx= 27/12 exact=no expected=4e01860055aa00817fe718fe rx_head=00000000000000000000000000000000
+standard-scan baud=  134 trial=1 ACM->USB rx=  1/12 exact=no expected=4f01860055aa00817fe718fe rx_head=ff
+  readback RX/TX=[(134, 134), (134, 134)]; FAIL
+standard-scan baud=  150 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01960055aa00817fe718fe rx_head=00000000000000000000000000000000
+standard-scan baud=  150 trial=1 ACM->USB rx=  1/12 exact=no expected=4f01960055aa00817fe718fe rx_head=ff
+  readback RX/TX=[(150, 150), (150, 150)]; FAIL
+standard-scan baud=  200 trial=1 USB->ACM rx= 27/12 exact=no expected=4e01c80055aa00817fe718fe rx_head=00000000000000000000000000000000
+standard-scan baud=  200 trial=1 ACM->USB rx=  0/12 exact=no expected=4f01c80055aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(200, 200), (200, 200)]; FAIL
+integer      baud= 1500 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1500 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1500, 1500), (1500, 1500)]; PASS
+integer      baud= 1350 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1350 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1350, 1350), (1350, 1350)]; PASS
+integer      baud= 1275 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1275 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1275, 1275), (1275, 1275)]; PASS
+integer      baud= 1237 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1237 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1237, 1237), (1237, 1237)]; PASS
+integer      baud= 1218 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01c20455aa00817fe718fe rx_head=00000000000000000000000000000000
+integer      baud= 1218 trial=1 ACM->USB rx=  0/12 exact=no expected=4f01c20455aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(1218, 1218), (1218, 1218)]; FAIL
+integer      baud= 1227 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1227 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1227, 1227), (1227, 1227)]; PASS
+integer      baud= 1222 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1222 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1222, 1222), (1222, 1222)]; PASS
+integer      baud= 1220 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01c40455aa00817fe718fe rx_head=00000000000000000000000000000000
+integer      baud= 1220 trial=1 ACM->USB rx=  0/12 exact=no expected=4f01c40455aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(1220, 1220), (1220, 1220)]; FAIL
+integer      baud= 1221 trial=1 USB->ACM rx= 12/12 exact=yes
+integer      baud= 1221 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1221, 1221), (1221, 1221)]; PASS
+Common standard minimum among checked rates: 1800 baud.
+Integer bisection boundary: 1220 / 1221 baud.
+boundary     baud= 1217 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01c10455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1217 trial=1 ACM->USB rx=  0/12 exact=no expected=4f01c10455aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(1217, 1217), (1217, 1217)]; FAIL
+boundary     baud= 1217 trial=2 USB->ACM rx= 28/12 exact=no expected=4e02c10455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1217 trial=2 ACM->USB rx=  0/12 exact=no expected=4f02c10455aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(1217, 1217), (1217, 1217)]; FAIL
+boundary     baud= 1217 trial=3 USB->ACM rx= 28/12 exact=no expected=4e03c10455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1217 trial=3 ACM->USB rx=  0/12 exact=no expected=4f03c10455aa00817fe718fe rx_head=(empty)
+  readback RX/TX=[(1217, 1217), (1217, 1217)]; FAIL
+boundary     baud= 1218 trial=2 USB->ACM rx= 28/12 exact=no expected=4e02c20455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1218 trial=2 ACM->USB rx=  1/12 exact=no expected=4f02c20455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1218, 1218), (1218, 1218)]; FAIL
+boundary     baud= 1218 trial=3 USB->ACM rx= 28/12 exact=no expected=4e03c20455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1218 trial=3 ACM->USB rx=  1/12 exact=no expected=4f03c20455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1218, 1218), (1218, 1218)]; FAIL
+boundary     baud= 1219 trial=1 USB->ACM rx= 28/12 exact=no expected=4e01c30455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1219 trial=1 ACM->USB rx=  1/12 exact=no expected=4f01c30455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1219, 1219), (1219, 1219)]; FAIL
+boundary     baud= 1219 trial=2 USB->ACM rx= 28/12 exact=no expected=4e02c30455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1219 trial=2 ACM->USB rx=  1/12 exact=no expected=4f02c30455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1219, 1219), (1219, 1219)]; FAIL
+boundary     baud= 1219 trial=3 USB->ACM rx= 28/12 exact=no expected=4e03c30455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1219 trial=3 ACM->USB rx=  1/12 exact=no expected=4f03c30455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1219, 1219), (1219, 1219)]; FAIL
+boundary     baud= 1220 trial=2 USB->ACM rx= 28/12 exact=no expected=4e02c40455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1220 trial=2 ACM->USB rx=  1/12 exact=no expected=4f02c40455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1220, 1220), (1220, 1220)]; FAIL
+boundary     baud= 1220 trial=3 USB->ACM rx= 28/12 exact=no expected=4e03c40455aa00817fe718fe rx_head=00000000000000000000000000000000
+boundary     baud= 1220 trial=3 ACM->USB rx=  1/12 exact=no expected=4f03c40455aa00817fe718fe rx_head=ff
+  readback RX/TX=[(1220, 1220), (1220, 1220)]; FAIL
+boundary     baud= 1221 trial=2 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1221 trial=2 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1221, 1221), (1221, 1221)]; PASS
+boundary     baud= 1221 trial=3 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1221 trial=3 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1221, 1221), (1221, 1221)]; PASS
+boundary     baud= 1222 trial=2 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1222 trial=2 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1222, 1222), (1222, 1222)]; PASS
+boundary     baud= 1222 trial=3 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1222 trial=3 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1222, 1222), (1222, 1222)]; PASS
+boundary     baud= 1223 trial=1 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1223 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1223, 1223), (1223, 1223)]; PASS
+boundary     baud= 1223 trial=2 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1223 trial=2 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1223, 1223), (1223, 1223)]; PASS
+boundary     baud= 1223 trial=3 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1223 trial=3 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1223, 1223), (1223, 1223)]; PASS
+boundary     baud= 1224 trial=1 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1224 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1224, 1224), (1224, 1224)]; PASS
+boundary     baud= 1224 trial=2 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1224 trial=2 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1224, 1224), (1224, 1224)]; PASS
+boundary     baud= 1224 trial=3 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1224 trial=3 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1224, 1224), (1224, 1224)]; PASS
+boundary     baud= 1225 trial=1 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1225 trial=1 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1225, 1225), (1225, 1225)]; PASS
+boundary     baud= 1225 trial=2 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1225 trial=2 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1225, 1225), (1225, 1225)]; PASS
+boundary     baud= 1225 trial=3 USB->ACM rx= 12/12 exact=yes
+boundary     baud= 1225 trial=3 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(1225, 1225), (1225, 1225)]; PASS
+post-control baud=19200 trial=2 USB->ACM rx= 12/12 exact=yes
+post-control baud=19200 trial=2 ACM->USB rx= 12/12 exact=yes
+  readback RX/TX=[(19200, 19200), (19200, 19200)]; PASS
+Boundary results (exact exchanges / attempts):
+  1217: 0/3
+  1218: 0/3
+  1219: 0/3
+  1220: 0/3
+  1221: 3/3
+  1222: 3/3
+  1223: 3/3
+  1224: 3/3
+  1225: 3/3
+Lowest tested rate with all probes successful: 1221 baud.
+This tests connectivity, not measured clock rates, CAT throughput, or continuity across all untested rates.
+Original tty settings restored and verified.
+
+Driver and manufacturer cross-check (not additional connectivity tests)
+  Kernel: 7.3.4-zen2-2-zen. System enumeration identifies 1a86:7523 as a
+  CH340-family adapter (ch341/ch341-uart), and 359f:3101 as SIPEED UARTx4 HS
+  (cdc_acm). The connected ACM interface reports UART-1 HS. The USB IDs do
+  not determine the exact chip revision or the Sipeed firmware version.
+
+  CH340: WCH's CH340DS1 specifies 50 bps to 2 Mbps for its UART. This is a
+  datasheet rating, not a verified limit for this specific adapter. The Zen
+  ch341 driver clamps requested nonzero rates to 46-3000000 when computing
+  its divider. Attainable nominal rates depend on integer division and the
+  prescaler; there is no fixed driver list of allowed rates. The adapter's
+  'using simulated break' kernel log also identifies its limited-prescaler
+  quirk. The successful set path does not encode the divider's resulting baud
+  back into termios. A 10000000 readback thus does not establish a 10 Mbaud link.
+
+  Sipeed: the product documentation for SLogic Combo 8 UARTx4 HS lists maxima
+  of 20 Mbaud on the first two hardware UARTs and 1 Mbaud on the other two
+  GPIO UARTs. It does not specify a minimum or full set of supported baud
+  rates. Linux cdc_acm sends the requested rate in USB CDC SET_LINE_CODING;
+  a termios readback does not verify what the device put on its UART pins.
+
+  The 1221-baud result is for the linked pair, not an isolated IC rating.
+  It does not prove that every untested rate below it is unusable or that
+  rates above it all work. No upper limit or long transfer was tested here.
+
+Primary sources:
+  WCH, CH340DS1, Features (p. 1):
+    https://www.wch.cn/downloads/CH340DS1_PDF.html
+    https://cdn.sparkfun.com/datasheets/Dev/Arduino/Other/CH340DS1.PDF
+  Linux Zen v7.3.4-zen2, ch341_get_divisor/ch341_detect_quirks/ch341_set_termios:
+    https://github.com/zen-kernel/zen-kernel/blob/v7.3.4-zen2/drivers/usb/serial/ch341.c
+  Linux Zen v7.3.4-zen2, acm_tty_set_termios:
+    https://github.com/zen-kernel/zen-kernel/blob/v7.3.4-zen2/drivers/usb/class/cdc-acm.c
+  Sipeed, SLogic Combo 8, four-UART mode:
+    https://wiki.sipeed.com/hardware/zh/logic_analyzer/combo8/use_fouruart_function.html

@@ -1,14 +1,26 @@
 #include "mirror.hpp"
-#include "terminal.hpp"
 
 #include <array>
 #include <stdexcept>
-#include <utility>
 
+#include <asm/termbits.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
 
 namespace neko {
 namespace {
+
+// Use the Linux ABI here, separately from libc's termios in Terminal and Session.
+#ifdef TCGETS2
+using DeviceTermios = termios2;
+constexpr unsigned long get_settings = TCGETS2;
+constexpr unsigned long set_settings = TCSETS2;
+#else
+using DeviceTermios = termios; // On e.g. PowerPC, the original ioctl carries numeric speeds.
+constexpr unsigned long get_settings = TCGETS;
+constexpr unsigned long set_settings = TCSETS;
+#endif
 
 #ifdef CMSPAR
 constexpr tcflag_t stick_parity = CMSPAR;
@@ -17,12 +29,27 @@ constexpr tcflag_t stick_parity = 0;
 #endif
 constexpr tcflag_t frame_mask = CSIZE | PARENB | PARODD | CSTOPB | stick_parity;
 constexpr tcflag_t soft_flow_mask = IXON | IXOFF | IXANY;
-constexpr std::pair<unsigned int, speed_t> baud_options[] = {
-    {1200, B1200}, {2400, B2400}, {4800, B4800}, {9600, B9600}, {19200, B19200},
-    {38400, B38400}, {57600, B57600}, {115200, B115200}, {230400, B230400},
-    {460800, B460800}, {500000, B500000}, {576000, B576000}, {921600, B921600},
-    {1000000, B1000000},
-};
+
+int termios_ioctl(int fd, unsigned long request, DeviceTermios& attrs) noexcept {
+    int result;
+    do {
+        result = ioctl(fd, request, &attrs);
+    } while (result < 0 && errno == EINTR);
+    return result;
+}
+
+bool same_tty(int a, int b) {
+    // Resolve tty aliases such as /dev/tty, which have different stat device numbers.
+    unsigned int first = 0;
+    unsigned int second = 0;
+    if (ioctl(a, TIOCGDEV, &first) == 0 && ioctl(b, TIOCGDEV, &second) == 0) {
+        return first == second;
+    }
+
+    struct stat sa {}, sb {};
+    return fstat(a, &sa) == 0 && fstat(b, &sb) == 0 && S_ISCHR(sa.st_mode) &&
+           S_ISCHR(sb.st_mode) && sa.st_rdev == sb.st_rdev;
+}
 
 unsigned int data_bits(tcflag_t flags) {
     switch (flags & CSIZE) {
@@ -35,45 +62,12 @@ unsigned int data_bits(tcflag_t flags) {
 
 } // namespace
 
-speed_t serial_baud(unsigned int rate) {
-    for (const auto& [number, speed] : baud_options) {
-        if (number == rate) {
-            return speed;
-        }
-    }
-    throw std::invalid_argument("unsupported baud rate");
-}
+struct Mirror::PortSettings {
+    DeviceTermios original{};
+    DeviceTermios actual{};
+};
 
-std::optional<unsigned int> baud_rate(speed_t baud) {
-    for (const auto& [number, speed] : baud_options) {
-        if (speed == baud) {
-            return number;
-        }
-    }
-    // These standard speeds can also be inherited from an already configured port.
-    switch (baud) {
-    case B0: return 0;
-    case B50: return 50;
-    case B75: return 75;
-    case B110: return 110;
-    case B134: return 134;
-    case B150: return 150;
-    case B200: return 200;
-    case B300: return 300;
-    case B600: return 600;
-    case B1800: return 1800;
-    case B1152000: return 1152000;
-    case B1500000: return 1500000;
-    case B2000000: return 2000000;
-    case B2500000: return 2500000;
-    case B3000000: return 3000000;
-    case B3500000: return 3500000;
-    case B4000000: return 4000000;
-    default: return std::nullopt;
-    }
-}
-
-tcflag_t serial_frame(std::string_view format) {
+unsigned int serial_frame(std::string_view format) {
     if (format.size() != 3 || format[0] < '5' || format[0] > '8' ||
         (format[1] != 'N' && format[1] != 'E' && format[1] != 'O') ||
         (format[2] != '1' && format[2] != '2')) {
@@ -94,7 +88,8 @@ tcflag_t serial_frame(std::string_view format) {
     return flags;
 }
 
-std::string format_serial_frame(tcflag_t flags) {
+std::string Mirror::frame() const {
+    const auto flags = port_->actual.c_cflag;
     char parity = 'N';
     if (flags & PARENB) {
         if (flags & stick_parity) {
@@ -107,7 +102,7 @@ std::string format_serial_frame(tcflag_t flags) {
 }
 
 Mirror::Mirror(const std::string& device, std::size_t capacity, std::optional<Flow> flow)
-    : flow_(flow), pending_(capacity) {
+    : port_(std::make_unique<PortSettings>()), flow_(flow), pending_(capacity) {
     const auto access = software_flow() ? O_RDWR : O_WRONLY;
     fd_.reset(open(device.c_str(), access | O_NOCTTY | O_NONBLOCK | O_CLOEXEC));
     if (fd() < 0) {
@@ -118,29 +113,29 @@ Mirror::Mirror(const std::string& device, std::size_t capacity, std::optional<Fl
     if (ioctl(fd(), TIOCGPTN, &pty_number) == 0) {
         throw std::invalid_argument("mirror must be an existing tty or PTY slave, not ptmx");
     }
-    if (tcgetattr(fd(), &original_) < 0) {
+    if (termios_ioctl(fd(), get_settings, port_->original) < 0) {
         const int error = errno;
         throw std::system_error(error, std::generic_category(),
                                 "read terminal settings for mirror device '" + device + "'");
     }
 }
 
-void Mirror::configure(int local_tty, std::optional<speed_t> baud, std::optional<tcflag_t> frame) {
+void Mirror::configure(int local_tty, std::optional<std::uint32_t> baud,
+                       std::optional<unsigned int> frame) {
     if (same_tty(local_tty, fd())) {
         throw std::invalid_argument("mirror device must not be the current terminal");
     }
 
-    auto attrs = original_;
+    auto attrs = port_->original;
     attrs.c_oflag &= ~OPOST;
     attrs.c_lflag &= ~(ECHO | ECHONL);
     if (baud || frame) {
         attrs.c_cflag = (attrs.c_cflag & ~frame_mask) | frame.value_or(CS8);
     }
     if (baud) {
-        attrs.c_cflag |= CLOCAL;
-        if (cfsetispeed(&attrs, *baud) < 0 || cfsetospeed(&attrs, *baud) < 0) {
-            throw os_error("configure mirror baud rate");
-        }
+        attrs.c_cflag &= ~(CBAUD | CIBAUD);
+        attrs.c_cflag |= CLOCAL | BOTHER | (static_cast<tcflag_t>(BOTHER) << IBSHIFT);
+        attrs.c_ispeed = attrs.c_ospeed = *baud;
     }
     if (baud || flow_) {
         attrs.c_cflag &= ~CRTSCTS;
@@ -161,31 +156,54 @@ void Mirror::configure(int local_tty, std::optional<speed_t> baud, std::optional
         }
         attrs.c_cflag |= CRTSCTS;
     }
-    set_termios(fd(), attrs);
+    if (termios_ioctl(fd(), set_settings, attrs) < 0) {
+        const int error = errno;
+        if (baud) {
+            throw std::system_error(error, std::generic_category(),
+                                    "configure mirror for --baud " + std::to_string(*baud));
+        }
+        throw os_error("set mirror terminal settings", error);
+    }
     configured_ = true;
-    if (tcgetattr(fd(), &actual_) < 0) {
+    auto& actual = port_->actual;
+    if (termios_ioctl(fd(), get_settings, actual) < 0) {
         throw os_error("read back mirror terminal settings");
     }
-    if ((baud || frame) && (actual_.c_cflag & frame_mask) != frame.value_or(CS8)) {
+    // Linux uses the output rate when the input baud selector is B0.
+    const auto rx_baud = actual.c_cflag & CIBAUD ? actual.c_ispeed : actual.c_ospeed;
+    if (baud && (rx_baud != *baud || actual.c_ospeed != *baud)) {
+        throw std::runtime_error("mirror device did not accept --baud " + std::to_string(*baud) +
+                                 " (driver reports RX " + std::to_string(rx_baud) +
+                                 ", TX " + std::to_string(actual.c_ospeed) + " baud)");
+    }
+    if ((baud || frame) && (actual.c_cflag & frame_mask) != frame.value_or(CS8)) {
         throw std::runtime_error("mirror device does not support the requested framing");
     }
-    if (flow_ && (((attrs.c_iflag ^ actual_.c_iflag) & soft_flow_mask) ||
-                  ((attrs.c_cflag ^ actual_.c_cflag) & CRTSCTS) ||
-                  (software_flow() && ((actual_.c_lflag & ICANON) || !(actual_.c_cflag & CREAD))))) {
+    if (flow_ && (((attrs.c_iflag ^ actual.c_iflag) & soft_flow_mask) ||
+                  ((attrs.c_cflag ^ actual.c_cflag) & CRTSCTS) ||
+                  (software_flow() && ((actual.c_lflag & ICANON) || !(actual.c_cflag & CREAD))))) {
         throw std::runtime_error("mirror device does not support the requested --flow");
     }
 }
 
+std::uint32_t Mirror::baud() const { return port_->actual.c_ospeed; }
+bool Mirror::hardware_flow() const { return port_->actual.c_cflag & CRTSCTS; }
+bool Mirror::kernel_ixon() const { return port_->actual.c_iflag & IXON; }
+bool Mirror::kernel_ixoff() const { return port_->actual.c_iflag & IXOFF; }
+
 double Mirror::wire_bytes_per_second() const {
-    const auto flags = actual_.c_cflag;
-    const auto rate = baud_rate(cfgetospeed(&actual_)).value_or(0);
+    const auto flags = port_->actual.c_cflag;
+    const auto rate = baud();
     const auto bits = 1 + data_bits(flags) + ((flags & PARENB) != 0) + (flags & CSTOPB ? 2 : 1);
     return static_cast<double>(rate ? rate : 115200) / bits;
 }
 
-Mirror::~Mirror() {
+Mirror::~Mirror() { restore(); }
+
+void Mirror::restore() noexcept {
     if (configured_) {
-        restore_termios(fd(), original_);
+        termios_ioctl(fd(), set_settings, port_->original);
+        configured_ = false;
     }
 }
 
@@ -224,12 +242,13 @@ std::size_t Mirror::offer(std::string_view bytes, SendPolicy policy) {
     if (can_submit() && pending_.empty()) {
         bytes.remove_prefix(write_once(bytes));
     }
-    if (fd() < 0 || pending_.capacity() == 0 || policy == SendPolicy::immediate) {
-        dropped_ += bytes.size();
-    } else if (policy == SendPolicy::drop_oldest) {
+    if (fd() >= 0 && policy == SendPolicy::backpressure) {
+        return size - bytes.size() + pending_.append(bytes);
+    }
+    if (fd() >= 0 && pending_.capacity() && policy == SendPolicy::drop_oldest) {
         enqueue(bytes);
     } else {
-        return size - bytes.size() + pending_.append(bytes);
+        dropped_ += bytes.size();
     }
     return size;
 }
@@ -256,10 +275,7 @@ void Mirror::flush() {
 }
 
 void Mirror::fail(int error) {
-    if (configured_) {
-        restore_termios(fd(), original_);
-        configured_ = false;
-    }
+    restore();
     error_ = error;
     discard_pending();
     fd_.reset();

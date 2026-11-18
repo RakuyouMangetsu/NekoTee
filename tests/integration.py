@@ -42,6 +42,7 @@ class Session:
         self.mirror_master, self.mirror_slave = os.openpty() if self.peer is None else (self.peer, None)
         self.resize(24, 132)
         self.original = termios.tcgetattr(self.local_slave)
+        self.mirror_original = termios.tcgetattr(self.mirror_slave) if self.mirror_slave is not None else None
         os.set_blocking(self.local_master, False)
         os.set_blocking(self.mirror_master, False)
         device = self.device or os.ttyname(self.mirror_slave)
@@ -202,7 +203,8 @@ class RelayTests(unittest.TestCase):
                 self.assertEqual(noargs, subprocess.check_output([BINARY, "--help"], env=env))
 
     def test_reject_invalid_serial_settings(self):
-        for flag, value in (("--baud", "115200bps"), ("--baud", "12345"),
+        for flag, value in (("--baud", "115200bps"), ("--baud", "0"), ("--baud", "-1"),
+                            ("--baud", "4294967296"),
                             ("--frame", "9N1"), ("--frame", "8X1"), ("--frame", "8N3")):
             with self.subTest(flag=flag, value=value):
                 result = subprocess.run([BINARY, "--mirror", "/dev/null", flag, value],
@@ -210,9 +212,21 @@ class RelayTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(b"see --help", result.stderr)
 
+    def test_numeric_baud_settings(self):
+        for baud in (300, 600, 12345):
+            with self.subTest(baud=baud):
+                with Session("--baud", str(baud), "--buffer", "0", "--limit") as s:
+                    s.start()
+                    self.assertIn(f"Link: {baud} baud, 8N1".encode(), s.local)
+                    self.assertIn(f"PTY pacing: on, fixed at {baud / 10 * 0.99:g} B/s".encode(), s.local)
+                    self.assertEqual(s.finish(), 0)
+                    s.until(EXIT_TEXT, mirror=True)
+                    self.assertEqual(s.mirror, EXIT_TEXT)
+                    self.assertEqual(termios.tcgetattr(s.mirror_slave), s.mirror_original)
+
     def test_reject_invalid_queue_settings(self):
         for args in (("--wait", "-2"), ("--wait", "2147483648"), ("--wait", "1s"),
-                     ("--limit", "--buffer", "0"), ("--flow", "invalid"),
+                     ("--flow", "invalid"),
                      ("--resume", "-1"), ("--resume", "100"), ("--mirror-priority",)):
             with self.subTest(args=args):
                 result = subprocess.run([BINARY, "--mirror", "/dev/null", *args], capture_output=True)
@@ -552,6 +566,38 @@ class RelayTests(unittest.TestCase):
                         received_counts[label] = len(s.mirror)
             if {"1500 ms wait", "no exit wait"} <= received_counts.keys():
                 self.assertGreater(received_counts["1500 ms wait"], received_counts["no exit wait"])
+
+    @unittest.skipUnless(SERIAL_TX and SERIAL_RX, "set NEKOTEE_SERIAL_TX and NEKOTEE_SERIAL_RX")
+    def test_hardware_serial_zero_buffer_pacing(self):
+        self.assertFalse(os.path.samefile(SERIAL_TX, SERIAL_RX), "use distinct serial ports")
+        with serial_115200(SERIAL_TX), serial_115200(SERIAL_RX) as peer:
+            termios.tcflush(peer, termios.TCIFLUSH)
+            with Session("--baud", "115200", "--frame", "8N1", "--limit", "--buffer", "0",
+                         device=SERIAL_TX, peer=peer) as s:
+                s.start()
+                self.assertIn(b"Queue: 0 KiB; exit wait: 500 ms", s.local)
+                self.assertIn(b"PTY pacing: on, fixed at 11404.8 B/s, no queue watermarks", s.local)
+                output = self.write_burst(s, 1000)
+                started = time.monotonic()
+                s.send(CAT_COMMAND)
+                s.until(CAT_END, timeout=10)
+                local_elapsed = time.monotonic() - started
+                s.until(CAT_END, mirror=True, timeout=3)
+                mirror_elapsed = time.monotonic() - started
+                self.assertEqual(s.finish(), 0)
+                self.collect_serial_tail(s)
+
+                self.assertIn(output, s.local)
+                self.assertNotIn(b"PTY reads paused;", s.local)
+                self.assertEqual(self.check_cat_mirror(s, output, label="--limit --buffer 0"), 0)
+                wire_rate = 115200 / 10  # 8N1 includes one start bit and one stop bit.
+                for side, elapsed in (("PTY", local_elapsed), ("Serial", mirror_elapsed)):
+                    rate = len(output) / elapsed
+                    print(f"{side}: {len(output)} bytes in {elapsed:.3f}s, {rate:.0f} B/s "
+                          f"({rate / wire_rate:.1%} of nominal)", flush=True)
+                    # Allow for poll rounding, scheduling and USB delivery latency.
+                    self.assertGreaterEqual(rate, 0.90 * wire_rate)
+                    self.assertLessEqual(rate, 1.01 * wire_rate)
 
     def collect_serial_tail(self, s):
         deadline = time.monotonic() + 5

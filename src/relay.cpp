@@ -92,6 +92,7 @@ int relay(Terminal& terminal, Session& session, const Signals& signals, Mirror& 
     bool exit_reported = false;
     Progress exit_progress;
 
+    const bool unbuffered = mirror.capacity() == 0;
     const auto resume_at = static_cast<std::size_t>(
         static_cast<std::uint64_t>(mirror.capacity()) * options.resume_percent / 100);
     const auto wire_rate = mirror.wire_bytes_per_second();
@@ -170,7 +171,7 @@ int relay(Terminal& terminal, Session& session, const Signals& signals, Mirror& 
         }
 
         const bool pacing = options.limit && mirror.fd() >= 0 && !wait_expired;
-        if (pacing && !paused && mirror.pending_bytes() == mirror.capacity()) {
+        if (pacing && !unbuffered && !paused && mirror.pending_bytes() == mirror.capacity()) {
             paused = true;
             pause_progress = {};
         } else if (paused && (!pacing || (staged.empty() && mirror.pending_bytes() <= resume_at))) {
@@ -229,11 +230,16 @@ int relay(Terminal& terminal, Session& session, const Signals& signals, Mirror& 
         }
         double read_rate = 0;
         if (session.fd() >= 0 && pacing) {
-            if (paused || !staged.empty()) {
+            if (paused || !staged.empty() || (unbuffered && !mirror.can_submit())) {
                 read_size = 0;
             } else if (now < next_read) {
                 read_size = 0;
                 shorten_timeout(timeout, next_read);
+            } else if (unbuffered) {
+                read_rate = wire_rate * unbuffered_rate_fraction;
+                // Round down so a full batch fits in a 20 ms polling interval.
+                const auto chunk = std::max<std::size_t>(1, static_cast<std::size_t>(read_rate * 0.02));
+                read_size = std::min(read_size, chunk);
             } else {
                 // Allow bursts at up to 8x nominal wire speed, tapering to 1x near full.
                 const auto free = mirror.capacity() - mirror.pending_bytes();
@@ -253,7 +259,8 @@ int relay(Terminal& terminal, Session& session, const Signals& signals, Mirror& 
             interest(terminal.fd(), cancel_wait || (!ending_at && input_open && to_pty.free()),
                      !to_terminal.empty(), true),
             interest(session.fd(), read_size != 0, !to_pty.empty(), !hung_up),
-            interest(mirror.fd(), mirror.software_flow(), mirror.can_submit() && mirror.queued(), true),
+            interest(mirror.fd(), mirror.software_flow(),
+                     mirror.can_submit() && (mirror.queued() || !staged.empty()), true),
         };
         if (poll(pollfds.data(), pollfds.size(), timeout) < 0) {
             if (errno == EINTR) {

@@ -10,6 +10,8 @@ class Session;
 class Signals;
 class Mirror;
 
+inline constexpr double unbuffered_rate_fraction = 0.99;
+
 struct RelayOptions {
     std::optional<std::chrono::milliseconds> wait{std::chrono::milliseconds{500}};
     bool limit = false;

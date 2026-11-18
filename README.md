@@ -37,29 +37,33 @@ Run NekoTee in the foreground of your current terminal. Replace each example dev
 ./build/nekotee --mirror /dev/pts/12
 ./build/nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1
 ./build/nekotee --mirror /dev/ttyACM0 --baud 115200 --limit --resume 50 --wait -1
+./build/nekotee --mirror /dev/ttyUSB0 --baud 115200 --limit --buffer 0
 ```
 
 | Option<br>选项 | Default<br>默认值 | Description<br>说明 |
 | --- | --- | --- |
 | `--mirror DEVICE` | Required<br>必填 | Another TTY, an existing PTY slave, or a serial device such as `ttyS`, `ttyUSB`, or `ttyACM`. A PTY slave forwards to its master. The current terminal and `/dev/ptmx` are not valid.<br>另一 TTY、已有的 PTY 从端，或 `ttyS`、`ttyUSB`、`ttyACM` 等串口。写入 PTY 从端时由其主端接收。不能指定当前终端或 `/dev/ptmx`。 |
 | `--shell PATH` | Account shell<br>账户 shell | Shell executable path; falls back to `/bin/sh` when none is configured.<br>Shell 可执行文件路径；账户未配置时用 `/bin/sh`。 |
-| `--baud RATE` | Device setting<br>设备原设置 | Decimal baud rate without a unit, e.g. `--baud 115200`. Supported rates are listed in `--help`.<br>不带单位的十进制波特率，如 `--baud 115200`。支持的数值见 `--help`。 |
+| `--baud RATE` | Device setting<br>设备原设置 | Positive decimal integer without a unit, e.g. `--baud 115200`. The device and driver determine which rates are supported; NekoTee has no baud-rate list.<br>不带单位的十进制正整数，如 `--baud 115200`。可用波特率由设备和驱动决定，NekoTee 不设白名单。 |
 | `--frame FORMAT` | Device setting; 8N1 with `--baud`<br>设备原设置；指定 `--baud` 时为 8N1 | E.g. `7E1`: 5–8 data bits, `N` (none), `E` (even), or `O` (odd) parity, and 1 or 2 stop bits.<br>例如 `7E1`：数据位 5–8、校验 `N` 无／`E` 偶／`O` 奇、停止位 1 或 2。 |
 | `--buffer [N]` | 128 kbytes | Send queue capacity, 0–65536 kbytes (1 kbyte = 1024 bytes). No `N` means 128; also accepts `--buffer=N`.<br>待发队列容量，0–65536 kbytes（1 kbyte = 1024 字节）。省略 `N` 时为 128；也可写 `--buffer=N`。 |
 | `--wait MS` | 500 ms | Wait for queued bytes when the PTY exits. Use `0` to skip the wait or `-1` for no deadline.<br>PTY 退出后的队列等待时间。`0` 不等待，`-1` 不限时。 |
-| `--limit` | Off<br>关闭 | Pace PTY reads using the queue and the mirror link rate. Requires a nonzero `--buffer`.<br>根据队列余量和镜像链路速率限制原端读取。要求 `--buffer` 大于 0。 |
+| `--limit` | Off<br>关闭 | Pace PTY reads using the mirror link rate and available queue space. With `--buffer 0`, use a fixed rate.<br>根据镜像链路速率和队列余量限制原端读取。`--buffer 0` 时使用固定速率。 |
 | `--flow` | See below<br>见下方 | Use `--flow soft` for XON/XOFF or `--flow hard` for RTS/CTS. Sets the mirror link independently of PTY pacing. `soft` also requires read access to the device.<br>`--flow soft` 使用 XON/XOFF，`--flow hard` 使用 RTS/CTS。此选项设置镜像链路，与是否启用原端限速独立。`soft` 还需要设备的读权限。 |
-| `--resume PCT` | 50% | Resume level for `--limit`, as an integer from 0 to 99 without `%`. The pause level is always 100%.<br>`--limit` 的恢复水位，填 0 到 99 的整数，不带 `%`。暂停水位固定为 100%。 |
+| `--resume PCT` | 50% | Resume level for `--limit` with a nonzero queue, as an integer from 0 to 99 without `%`. The pause level is always 100%.<br>有队列时 `--limit` 的恢复水位，填 0 到 99 的整数，不带 `%`。暂停水位固定为 100%。 |
 | `-h`, `--help` | Also with no arguments<br>无参数时同样显示 | Show help without starting a session. The first nonempty of `LC_ALL`, `LC_MESSAGES`, and `LANG` selects Chinese for `zh` locales and English otherwise.<br>只显示帮助，不启动会话。按顺序取 `LC_ALL`、`LC_MESSAGES`、`LANG` 的第一个非空值；`zh` 区域用中文，其余用英文。 |
 
 Without `--flow`, `--limit` selects `soft`. Without `--limit` or `--flow`, `--baud` disables serial flow control; otherwise the device's flow control is kept.<br>
 未指定 `--flow` 时，`--limit` 默认选 `soft`。两者都未指定时，若指定了 `--baud` 则关闭串口流控，否则保留设备原设置。
 
+If the driver rejects the requested baud rate or reports a different rate after configuration, NekoTee exits before starting the shell. A matching readback cannot verify the hardware timing or the receiver's ability to use that rate.<br>
+如果驱动拒绝设置，或回读的波特率与请求不符，NekoTee 会在启动 Shell 前报错。回读一致不能验证实际线路速率，也不能保证接收端支持该速率。
+
 Window size changes are forwarded to the new PTY. Normal shell job control (`Ctrl-C`, `Ctrl-Z`, `fg`) stays in that session. Type `exit` to return to the original shell.<br>
 窗口尺寸变化会同步到新 PTY。`Ctrl-C`、`Ctrl-Z` 和 `fg` 等作业控制仍由新会话处理。输入 `exit` 返回原 shell。
 
-Startup shows the mirror path, shell, baud and framing read back from the driver, link flow control, queue size, exit wait and PTY pacing (including watermarks if enabled). The startup, progress and exit notices are not mirrored. An invalid or inaccessible target, or rejected serial configuration, is reported before the shell starts.<br>
-启动时显示镜像路径、Shell、从驱动回读的波特率和帧格式、串口流控类型、队列大小、退出等待和原端限速（开启时也显示水位）。起止和进度提示不进入镜像。目标无效、无法访问或驱动不接受串口设置时，会在启动 Shell 前报错。
+Startup shows the mirror path, shell, baud and framing read back from the driver, link flow control, queue size, exit wait and PTY pacing (including the queue watermarks or the fixed rate when applicable). The startup, progress and exit notices are not mirrored. An invalid or inaccessible target, or rejected serial configuration, is reported before the shell starts.<br>
+启动时显示镜像路径、Shell、从驱动回读的波特率和帧格式、串口流控类型、队列大小、退出等待和原端限速（适用时显示队列水位或固定速率）。起止和进度提示不进入镜像。目标无效、无法访问或驱动不接受串口设置时，会在启动 Shell 前报错。
 
 NekoTee temporarily disables terminal output processing and input echo on the mirror device and restores its settings on exit.<br>
 NekoTee 会临时关闭镜像设备的输出转换和输入回显，并在退出时恢复设置。
@@ -82,17 +86,20 @@ Soft wraps are joined into one line. If a single line scrolls out of the main sc
 ## Mirror Send Queue
 **镜像发送队列**
 
-- `--buffer N` or `--buffer=N`: Set the mirror send queue capacity to `0`–`65536` kbytes (`1 kbyte = 1024` bytes). Omitting the option or giving `--buffer` without a number uses `128` kbytes in either mode. `--buffer 0` disables the queue and drops bytes the device cannot accept in the immediate write.<br>
-  `--buffer N` 或 `--buffer=N`：将镜像待发队列容量设为 `0` 到 `65536` kbytes（`1 kbyte = 1024` 字节）。两种模式下，不传选项或只传 `--buffer` 都使用 `128` kbytes。`--buffer 0` 禁用队列，直接丢弃设备当下收不下的字节。
+- `--buffer N` or `--buffer=N`: Set the mirror send queue capacity to `0`–`65536` kbytes (`1 kbyte = 1024` bytes). Omitting the option or giving `--buffer` without a number uses `128` kbytes. `--buffer 0` disables the send queue.<br>
+  `--buffer N` 或 `--buffer=N`：将镜像待发队列容量设为 `0` 到 `65536` kbytes（`1 kbyte = 1024` 字节）。不传选项或只传 `--buffer` 都使用 `128` kbytes。`--buffer 0` 禁用待发队列。
 
 Without `--limit`, the mirror never makes PTY reads wait. With no backlog, try a nonblocking write immediately; queue anything the driver cannot accept and send it in order. When full, drop the oldest unsent bytes, which can leave a partial line or split a UTF-8 character. `--buffer 0` disables queuing and drops bytes that cannot be written immediately.<br>
 未启用 `--limit` 时，镜像不拖慢原端读取。没有积压就立即尝试非阻塞写入；未写入驱动的字节排队并按顺序发送。队列满时淘汰最旧的待发字节，可能留下残行或截断 UTF-8 字符。`--buffer 0` 不排队，直接丢弃写不进的字节。
 
-With `--limit`, the nominal link byte rate is the reported baud divided by the frame length in bits, including start, parity and stop bits. If the baud is unknown or zero, the pacing estimate uses 115200. The PTY read rate is capped at that estimate times `1 + 7 × free/capacity`, so it tapers as the queue fills. This does not change the port's baud.<br>
-启用 `--limit` 时，用回读的波特率除以帧位数（含起始位、校验位和停止位）估算链路字节速率。波特率未知或为 0 时按 115200 估算。PTY 的读取上限为该速率乘 `1 + 7 × 剩余容量 / 总容量`，队列越满越慢，不改变串口波特率。
+With `--limit`, the nominal link byte rate is the reported baud divided by the frame length in bits, including start, parity and stop bits. If the baud is unknown or zero, the pacing estimate uses 115200. Pacing does not change the port's baud.<br>
+启用 `--limit` 时，用回读的波特率除以帧位数（含起始位、校验位和停止位）估算链路字节速率。波特率未知或为 0 时按 115200 估算。限速不会改变串口波特率。
 
-At 100% queue occupancy, `--limit` pauses PTY reads instead of dropping data. Reads resume at or below `--resume`. A single read can produce more transcript bytes than there is room for, for example when a long line ends. Its unwritten suffix is kept until queued and is included in the number of bytes displayed before resume. A disconnected mirror no longer limits the PTY.<br>
-`--limit` 在队列占用达到 100% 时暂停读取 PTY，而不是丢数据。队列降到 `--resume` 或以下才恢复。一次读取可能产生超过剩余容量的文本，例如长行刚好换行；未入队的尾段暂存，计入恢复前还需处理的字节数。镜像设备断开后不再限制原端。
+With a nonzero queue, the PTY read limit is the link byte rate times `1 + 7 × free/capacity`, so it tapers as the queue fills. At 100%, PTY reads pause instead of dropping data, then resume at or below `--resume`. If a read produces more transcript bytes than fit, for example at the end of a long line, its unwritten suffix is held until it can be queued and is counted in the pause notice.<br>
+有队列时，PTY 读取上限为链路字节速率乘 `1 + 7 × 剩余容量 / 总容量`，队列越满越慢。达到 100% 就暂停读取而不丢数据，降到 `--resume` 或以下再恢复。如果一次产生的镜像文本超过队列余量（例如长行换行时），未入队的尾段会暂存并计入暂停提示。
+
+With `--limit --buffer 0`, the PTY read limit is fixed at 99% of the nominal link byte rate (about 11,405 bytes/s at 115200 baud, 8N1). If a write cannot complete, NekoTee holds only the rest of the current batch and waits for the port before reading more. There are no queue watermarks; `--resume` has no effect. In either limited mode, a disconnected mirror no longer limits the PTY.<br>
+`--limit --buffer 0` 将 PTY 读取上限固定为理论链路字节速率的 99%（115200 波特、8N1 时约为 11,405 字节/秒）。当前批次若未写完，只暂存它的尾段，等串口接收后再读取下一批。此时没有队列水位，`--resume` 不生效。两种限速模式下，镜像设备断开后均不再限制原端。
 
 The PTY backpressure is local in both cases. In `soft`, NekoTee stops submitting writes on peer XOFF (`0x13`) and resumes on XON (`0x11`). Bytes already handed to the driver may still arrive. NekoTee discards all other incoming bytes and does not send XON/XOFF when its own queue fills. `hard` enables RTS/CTS on the mirror port and needs compatible hardware and wiring; a PTY is not a hardware-flow destination.<br>
 两种握手设置都由本地暂停读取 PTY 来产生背压。`soft` 收到对端 XOFF（`0x13`）后停止提交新数据，收到 XON（`0x11`）后继续；已交给驱动的字节仍可能到达。其余输入全部丢弃，本地队列满时也不会主动发送 XON/XOFF。`hard` 启用镜像串口的 RTS/CTS，需要设备支持并接线；PTY 不是硬件流控目标。
@@ -124,6 +131,7 @@ For physical tests, specify two idle ports connected in both TX/RX directions th
 NEKOTEE_SERIAL_TX=/dev/ttyUSB0 NEKOTEE_SERIAL_RX=/dev/ttyACM0 \
   python3 tests/integration.py ./build/nekotee \
     RelayTests.test_hardware_serial_cat_burst \
+    RelayTests.test_hardware_serial_zero_buffer_pacing \
     RelayTests.test_hardware_serial_soft_flow \
     RelayTests.test_hardware_serial_rtscts_configuration
 ```

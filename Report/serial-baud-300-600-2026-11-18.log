@@ -1,0 +1,43 @@
+NEKOTEE PHYSICAL BAUD PREFLIGHT: 300 AND 600 BAUD
+Date: 2026-11-18 (timestamps use the test host's +08:00 time zone)
+Kernel: 7.3.4-zen2-2-zen
+Mirror port: /dev/ttyUSB0 (1a86:7523, ch341)
+Peer port: /dev/ttyACM0 (359f:3101, SIPEED UARTx4 HS, cdc_acm, interface 00)
+Stable paths:
+  /dev/serial/by-id/usb-1a86_USB2.0-Ser_-if00-port0
+  /dev/serial/by-id/usb-SIPEED_UARTx4_HS_FactoryAIOT_Prog_Serial-if00
+Format: 8N1. No hardware flow-control wires. Counts are received/expected.
+
+Raw bidirectional probe (2026-11-18T20:25:40.827106+08:00)
+No NekoTee process. Linux B300/B600 set on both ports; both ports showed the
+requested input and output rate on readback. 122 printable bytes per direction.
+  baud | USB -> ACM       | ACM -> USB
+   300 | 385/122 corrupt  | 1/122 corrupt (fe)
+   600 | 385/122 corrupt  | 1/122 corrupt (e2)
+USB -> ACM starts with a long run of NULs at both rates.
+
+Raw sequential one-way recheck (2026-11-18T20:29:50.069512+08:00)
+Each row sent 44 bytes in one direction with no simultaneous reverse traffic.
+19200 baud is a positive control; elapsed seconds below are probe observations,
+not CAT throughput or exit-drain measurements.
+  baud | direction  | received | exact | first RX s | last RX s | received head
+ 19200 | USB -> ACM |  44/44   | yes   |   0.004460 |  0.028391 | expected ASCII
+ 19200 | ACM -> USB |  44/44   | yes   |   0.016964 |  0.025913 | expected ASCII
+   300 | USB -> ACM | 134/44   | no    |   0.010016 |  1.454919 | 00 00 00 ...
+   300 | ACM -> USB |   1/44   | no    |   0.035526 |  0.035526 | e4
+   600 | USB -> ACM | 134/44   | no    |   0.005309 |  0.727943 | 00 00 00 ...
+   600 | ACM -> USB |   1/44   | no    |   0.020672 |  0.020672 | d2
+
+NekoTee with numeric --baud (TCSETS2/BOTHER)
+Both settings were accepted on startup; a short shell transcript expected to
+mirror 59 bytes was corrupt at each rate (185 bytes received, starting with NULs).
+As a readback-only check, the USB driver also reported 10000000 when asked for
+10000000. No on-wire compatibility was verified at 10000000. The three CLI
+checks restored the initial terminal settings on exit.
+
+CAT matrix status: BLOCKED at 300 and 600 baud, 18 planned runs not started.
+For each rate and 64/128/256 KiB: --limit --buffer 0; --buffer 128 --wait -1
+(no pacing); --limit --buffer 128 (default wait). Resume threshold: 50% when
+applicable. There are no CAT timings, data-loss, or flow-control measurements
+at these two rates; raw link corruption is already reproducible before the relay.
+Related physical CAT runs at 19200 and 921600 remain in their separate logs.

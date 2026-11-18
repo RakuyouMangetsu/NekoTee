@@ -25,7 +25,6 @@ private:
     bool raw_ = false;
 };
 
-bool same_tty(int a, int b);
 void set_termios(int fd, const termios& value);
 void restore_termios(int fd, const termios& value) noexcept;
 

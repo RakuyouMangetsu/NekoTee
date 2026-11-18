@@ -3,10 +3,9 @@
 #include "io.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
-
-#include <termios.h>
 
 namespace neko {
 
@@ -18,12 +17,16 @@ public:
     Mirror(const std::string& device, std::size_t capacity, std::optional<Flow> flow);
     ~Mirror();
 
-    void configure(int local_tty, std::optional<speed_t> baud, std::optional<tcflag_t> frame);
+    void configure(int local_tty, std::optional<std::uint32_t> baud, std::optional<unsigned int> frame);
     int fd() const { return fd_.get(); }
     bool queued() const { return !pending_.empty(); }
     std::size_t pending_bytes() const { return pending_.size(); }
     std::size_t capacity() const { return pending_.capacity(); }
-    const termios& settings() const { return actual_; }
+    std::uint32_t baud() const;
+    std::string frame() const;
+    bool hardware_flow() const;
+    bool kernel_ixon() const;
+    bool kernel_ixoff() const;
     double wire_bytes_per_second() const;
     bool software_flow() const { return flow_ == Flow::soft; }
     bool can_submit() const { return fd() >= 0 && !peer_paused_; }
@@ -37,12 +40,13 @@ public:
     std::uint64_t dropped() const { return dropped_; }
 
 private:
+    struct PortSettings;
+    void restore() noexcept;
     std::size_t write_once(std::string_view bytes);
     void enqueue(std::string_view bytes);
 
     Fd fd_;
-    termios original_{};
-    termios actual_{};
+    std::unique_ptr<PortSettings> port_;
     bool configured_ = false;
     std::optional<Flow> flow_;
     bool peer_paused_ = false;
@@ -51,9 +55,6 @@ private:
     std::uint64_t dropped_ = 0;
 };
 
-speed_t serial_baud(unsigned int rate);
-std::optional<unsigned int> baud_rate(speed_t baud);
-tcflag_t serial_frame(std::string_view format);
-std::string format_serial_frame(tcflag_t flags);
+unsigned int serial_frame(std::string_view format);
 
 } // namespace neko

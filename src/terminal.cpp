@@ -3,7 +3,6 @@
 #include <stdexcept>
 
 #include <fcntl.h>
-#include <sys/stat.h>
 
 namespace neko {
 
@@ -43,19 +42,6 @@ void Terminal::restore() noexcept {
         restore_termios(fd(), original_);
         raw_ = false;
     }
-}
-
-bool same_tty(int a, int b) {
-    // Resolve tty aliases such as /dev/tty, which have different stat device numbers.
-    unsigned int first = 0;
-    unsigned int second = 0;
-    if (ioctl(a, TIOCGDEV, &first) == 0 && ioctl(b, TIOCGDEV, &second) == 0) {
-        return first == second;
-    }
-
-    struct stat sa {}, sb {};
-    return fstat(a, &sa) == 0 && fstat(b, &sb) == 0 && S_ISCHR(sa.st_mode) &&
-           S_ISCHR(sb.st_mode) && sa.st_rdev == sb.st_rdev;
 }
 
 void set_termios(int fd, const termios& value) {
