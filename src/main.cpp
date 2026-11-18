@@ -16,7 +16,7 @@ namespace {
 constexpr unsigned int default_buffer = 128;
 constexpr unsigned int max_buffer = 64 * 1024;
 
-bool chinese_help() {
+bool use_chinese() {
     for (const auto* variable : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
         const char* value = std::getenv(variable);
         if (value && *value) {
@@ -29,8 +29,21 @@ bool chinese_help() {
     return false;
 }
 
+void session_start_message() {
+    std::cerr << (use_chinese() ? "[nekotee] PTY 会话已启动。输入 exit 返回原 shell。\n"
+                               : "[nekotee] PTY session started. Type exit to return.\n");
+}
+
+void session_end_message(int status) {
+    if (use_chinese()) {
+        std::cerr << "\n[nekotee] PTY 会话已结束，退出码 " << status << "。\n";
+    } else {
+        std::cerr << "\n[nekotee] PTY session ended (exit status " << status << ").\n";
+    }
+}
+
 void help() {
-    std::cout << (chinese_help() ? R"HELP(用法：nekotee --mirror DEVICE [选项]
+    std::cout << (use_chinese() ? R"HELP(用法：nekotee --mirror DEVICE [选项]
 
   --mirror DEVICE       镜像目标：现有 tty、PTY 从端、ttyS、ttyUSB 或 ttyACM
   --shell PATH          覆盖当前账户配置的 shell；未配置时使用 /bin/sh
@@ -42,10 +55,12 @@ void help() {
 
 工作机制：
   当前窗口接入一个新 PTY，运行交互 shell。输入只发给该 shell；镜像设备只写不读。
-  镜像发送 UTF-8 纯文本（CRLF 换行），包含可见提示符、命令回显和输出。
+  镜像在 PTY 输出 LF 时发送该行当时的可见内容（UTF-8 纯文本，以 CRLF 结尾）。
+  提示符和命令一起逐行发送。退格、补全及仅用 CR 的重绘只更新待发送的行。
+  本地会话即时显示。未到 LF 的行不会发送，退出时也是如此。
   不发送原始按键、关闭回显的输入、样式或控制序列。主动打印的敏感文字仍会镜像。
   移动光标和清屏不会在镜像端重演；全屏应用显示为文本转录，不是画面复制。
-  默认缓冲为 0：立即尝试写镜像，写不进就丢弃，原终端不等待镜像。
+  默认发送缓冲为 0：有完整行就立即尝试写镜像，写不进就丢弃。
   启用缓冲后满时丢最旧的字节。镜像优先时，缓冲到 75% 暂停读取 PTY 输出，
   降到 50% 再继续。缓冲填满时仍丢最旧的数据。输入 exit 返回原 shell。
 
@@ -62,14 +77,16 @@ void help() {
 
 How it works:
   This window connects to an interactive shell on a new PTY. Input goes only
-  to that PTY; the mirror device is write-only. The mirror receives visible
-  prompts, echoed commands, and output as UTF-8 text with CRLF line breaks.
+  to that PTY. The write-only mirror sends the visible line at each PTY LF as
+  UTF-8 text ending in CRLF. Prompts and commands are sent together. Backspaces,
+  suggestions, and CR-only redraws update the current line until it is sent.
+  Local output is immediate. Lines without LF are skipped, including at exit.
   Raw keystrokes, no-echo input, styles, and control sequences are not copied.
   A secret deliberately printed by an application is still visible and mirrored.
   Cursor movement and screen clears are not replayed on the mirror; full-screen
   applications are transcribed as text, not reproduced as a duplicate display.
-  The default is zero buffering: write immediately, drop what cannot be written,
-  and never wait for the mirror during the session. A full buffer drops its oldest
+  The default send buffer is zero. Write completed lines immediately and drop
+  what the mirror cannot accept. A full buffer drops its oldest
   bytes. Mirror priority pauses PTY reads at 75% full and resumes at 50%.
   It still drops the oldest bytes if the buffer fills. Type exit to return.
 
@@ -153,16 +170,23 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    bool started = false;
     try {
         const auto capacity = options.buffer.value_or(options.priority ? default_buffer : 0) *
                               std::size_t{1024};
-        const auto shell = options.shell.empty() ? neko::default_shell() : options.shell;
         const neko::Signals signals;
+        neko::Mirror mirror(options.device, capacity, options.priority);
         neko::Terminal terminal;
-        neko::Mirror mirror(options.device, terminal.fd(), options.baud, capacity, options.priority);
-        neko::Session session(shell, terminal.settings(), terminal.size(), signals);
-        const int status = neko::relay(terminal, session, signals, mirror);
-        terminal.restore();
+        mirror.configure(terminal.fd(), options.baud);
+        const auto shell = options.shell.empty() ? neko::default_shell() : options.shell;
+        int status;
+        {
+            neko::Session session(shell, terminal.settings(), terminal.size(), signals);
+            started = true;
+            session_start_message();
+            status = neko::relay(terminal, session, signals, mirror);
+            terminal.restore();
+        }
         if (mirror.error()) {
             std::cerr << "nekotee: mirror disabled: " << std::generic_category().message(mirror.error())
                       << '\n';
@@ -170,9 +194,16 @@ int main(int argc, char** argv) {
         if (mirror.dropped()) {
             std::cerr << "nekotee: dropped " << mirror.dropped() << " mirror bytes\n";
         }
-        return status == 0 && mirror.priority() && (mirror.error() || mirror.dropped()) ? 1 : status;
+        if (status == 0 && mirror.priority() && (mirror.error() || mirror.dropped())) {
+            status = 1;
+        }
+        session_end_message(status);
+        return status;
     } catch (const std::exception& error) {
         std::cerr << "nekotee: " << error.what() << '\n';
+        if (started) {
+            session_end_message(1);
+        }
         return 1;
     }
 }

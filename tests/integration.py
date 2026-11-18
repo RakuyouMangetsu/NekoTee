@@ -96,7 +96,7 @@ class Session:
             self.pump(read_mirror=read_mirror)
 
     def start(self):
-        self.until(b"PS> ", mirror=True)
+        self.until(b"PS> ")
 
     def finish(self, command=b"exit\n", read_mirror=True):
         if command:
@@ -129,6 +129,65 @@ class RelayTests(unittest.TestCase):
                 self.assertIn(expected.encode(), noargs)
                 self.assertEqual(noargs, subprocess.check_output([BINARY, "--help"], env=env))
 
+    def test_session_messages_stay_on_local_terminal(self):
+        with Session() as s:
+            s.start()
+            start = b"[nekotee] PTY session started."
+            end = b"[nekotee] PTY session ended (exit status 37)."
+            self.assertIn(start, s.local)
+            self.assertLess(s.local.index(start), s.local.index(b"PS> "))
+            self.assertEqual(s.finish(b"exit 37\n"), 37)
+            self.assertIn(end, s.local)
+            self.assertNotIn(start, s.mirror)
+            self.assertNotIn(end, s.mirror)
+
+    def test_reject_missing_tty_before_starting_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            device = str(Path(directory, "tty-missing"))
+            with Session(device=device) as s:
+                self.assertEqual(s.finish(None), 1)
+                self.assertIn(os.fsencode(device), s.local)
+                self.assertNotIn(b"PTY session started", s.local)
+                self.assertNotIn(b"PS> ", s.local)
+                self.assertEqual(termios.tcgetattr(s.local_slave), s.original)
+
+    def test_edited_command_is_mirrored_only_at_line_feed(self):
+        with Session() as s:
+            s.start()
+            local_start, mirror_start = len(s.local), len(s.mirror)
+            s.send(b"echo cmake")
+            s.until(b"echo cmake", since=local_start)
+            local_start = len(s.local)
+            s.send(b"\x7f" * 3)
+            s.until(b"\x08", since=local_start)
+            s.pump()
+            self.assertEqual(s.mirror[mirror_start:], b"")
+            s.send(b"\n")
+            s.until(b"PS> echo cm\r\ncm\r\n", mirror=True, since=mirror_start)
+            self.assertEqual(s.mirror[mirror_start:], b"PS> echo cm\r\ncm\r\n")
+            self.assertEqual(s.finish(), 0)
+
+    def test_cr_redraw_and_erasable_suggestion_are_not_sent(self):
+        with Session() as s:
+            s.start()
+            # Paint a hint, redraw with CR, then finalize a shorter line.
+            s.send(b"printf 'Output: cm\\033[90m\\x61ke\\033[0m'; "
+                   b"sleep 0.1; printf '\\r\\033[KOutput: cm\\n'\n")
+            s.until(b"\x1b[90make\x1b[0m")
+            s.until(b"\r\nOutput: cm\r\n", mirror=True)
+            self.assertEqual(s.finish(), 0)
+            self.assertNotIn(b"Output: cmake", s.mirror)
+
+    def test_soft_wrapped_line_survives_scrolling_before_lf(self):
+        with Session() as s:
+            s.start()
+            s.resize(5, 30)
+            s.send(b"printf 'BEGIN%0400dEND\\n' 12345\n")
+            line = b"BEGIN" + b"0" * 395 + b"12345END\r\n"
+            s.until(line, mirror=True)
+            self.assertEqual(s.finish(), 0)
+            self.assertEqual(s.mirror.count(line), 1)
+
     def test_visible_commands_text_and_no_echo(self):
         with Session() as s:
             s.start()
@@ -142,12 +201,13 @@ class RelayTests(unittest.TestCase):
             s.send(b"printf '\\033]0;OSC-\\x48IDDEN\\007\\033_GFX-\\x48IDDEN\\033\\\\\n'\n")
             s.until(b"OSC-HIDDEN")
 
-            start = len(s.mirror)
-            s.send(b"read -rs -p 'Password: ' value; printf '\\naccepted=%s\\n' \"${#value}\"\n")
-            s.until(b"\r\nPassword: ", mirror=True, since=start)
+            local_start, start = len(s.local), len(s.mirror)
+            s.send(b"read -rs -p $'Pass\\x77ord: ' value; printf '\\naccepted=%s\\n' \"${#value}\"\n")
+            s.until(b"Password: ", since=local_start)
+            self.assertNotIn(b"Password: ", s.mirror[start:])
             secret = b"not-for-mirror-zz"
             s.send(secret + b"\n")
-            s.until(f"\r\naccepted={len(secret)}\r\n".encode(), mirror=True, since=start)
+            s.until(f"\r\nPassword: \r\naccepted={len(secret)}\r\n".encode(), mirror=True, since=start)
             self.assertEqual(s.finish(), 0)
             for invisible in (b"\x1b", b"\x07", b"\x08", secret, b"HIDDEN", b"GFX-HIDDEN"):
                 self.assertNotIn(invisible, s.mirror)
@@ -179,6 +239,7 @@ class RelayTests(unittest.TestCase):
             s.start()
             s.process.terminate()
             self.assertEqual(s.finish(None), 128 + signal.SIGTERM)
+            self.assertIn(b"PTY session ended (exit status 143)", s.local)
             self.assertEqual(termios.tcgetattr(s.local_slave), s.original)
             self.assertEqual(termios.tcgetattr(s.mirror_slave), mirror_original)
 

@@ -51,26 +51,32 @@ Run NekoTee in the foreground of your current terminal. Replace each example dev
 Window size changes are forwarded to the new PTY. Normal shell job control (`Ctrl-C`, `Ctrl-Z`, `fg`) stays in that session. Type `exit` to return to the original shell.<br>
 窗口尺寸变化会同步到新 PTY。`Ctrl-C`、`Ctrl-Z` 和 `fg` 等作业控制仍由新会话处理。输入 `exit` 返回原 shell。
 
+The current terminal displays a message when the PTY starts and ends. An invalid or inaccessible mirror path is reported before the shell starts.<br>
+当前终端会显示 PTY 会话的起止提示。镜像设备路径无效或无法访问时，程序会在启动 shell 前报错。
+
 NekoTee temporarily disables output processing on the mirror device to send its text unchanged and restores the device's terminal settings on normal exit.<br>
 NekoTee 会临时关闭镜像设备的输出转换，让文本原样写入，并在正常退出时恢复设备的终端设置。
 
 ## What Gets Mirrored
 **镜像内容**
 
-The original terminal receives unmodified output. The mirror receives a plain UTF-8 transcript with CRLF line breaks, including prompts, visible commands such as `PS> ls`, and their output.<br>
-原终端接收未经修改的输出。镜像接收使用 CRLF 换行的 UTF-8 纯文本，包括提示符、`PS> ls` 这样的可见命令以及命令输出。
+The original terminal displays output as it arrives. Each PTY line feed (LF) sends the visible text of that line to the mirror as UTF-8 with a CRLF ending. A shell prompt and the command entered at it appear together, for example `PS> ls`.<br>
+原终端即时显示输出。PTY 输出换行符（LF）时，镜像端收到该行当时的 UTF-8 可见文字，以 CRLF 结尾。提示符和在其后输入的命令会一起发送，例如 `PS> ls`。
 
 Raw keystrokes, input typed with echo disabled, terminal control sequences, and characters with the SGR conceal attribute are not copied. An application that prints a secret can still expose it on the mirror. Use a destination and receiver you trust.<br>
 原始按键、关闭回显时输入的内容、终端控制序列，以及带有 SGR 隐藏属性的字符不会复制。应用主动输出的敏感内容仍可能出现在镜像中，请使用可信的目标设备和接收端。
 
-The transcript is append-only: it cannot erase previously sent text or reproduce cursor movement, colors, or graphics. An edited line may appear again, and fast screen redraws may not be fully represented.<br>
-转录只能追加，不能擦除已发送的文字，也不会重演光标移动、颜色或图形。编辑过的行可能再次出现，快速刷新的画面也不一定完整保留。
+Backspaces, suggestion redraws, and carriage returns (CR) update the pending line until it is sent. A suggestion cleared before LF stays out of the transcript. Text that never reaches a line feed, such as an idle prompt, a CR-only progress display, or an unterminated final line, can be seen on the original terminal only.<br>
+退格、补全重绘和回车符（CR）会更新待发送的行。换行前清除的补全建议不会进入转录。空闲提示符、只用 CR 刷新的进度条以及退出时仍未换行的末行只显示在原终端。
+
+Soft wraps are joined into one line. If a single line scrolls out of the main screen before its LF, the transcript keeps up to 64 KiB of its most recent off-screen text.<br>
+终端自动折行的内容会合并为一行。单行内容在换行前滚出主屏幕时，转录最多保留最近滚出的 64 KiB。
 
 ## Buffering and Backpressure
 **缓冲与背压**
 
-- **Default:** `0 kbytes`. Attempt a nonblocking write immediately and drop bytes the device cannot accept. The local session does not wait for the mirror.<br>
-  **默认：** `0 kbytes`。立即尝试非阻塞写入，丢弃设备暂时收不下的字节。本地会话不等待镜像。
+- **Default** `0 kbytes`. Attempt a nonblocking write as soon as a line is complete and drop bytes the device cannot accept. The local session does not wait for the mirror.<br>
+  **默认** `0 kbytes`。行一完成就尝试非阻塞写入，丢弃设备暂时收不下的字节。本地会话不等待镜像。
 - `--buffer-kbytes`: Enable a `128 kbytes` buffer and keep local priority.<br>
   `--buffer-kbytes`：启用 `128 kbytes` 缓冲，仍优先保障本地会话。
 - `--buffer-kbytes N` or `--buffer-kbytes=N`: Set the capacity to `0`–`65536` kbytes (`1 kbyte = 1024` bytes).<br>

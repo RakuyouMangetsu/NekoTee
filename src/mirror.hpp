@@ -12,10 +12,10 @@ namespace neko {
 
 class Mirror {
 public:
-    Mirror(const std::string& device, int local_tty, std::optional<speed_t> baud,
-           std::size_t capacity, bool priority);
+    Mirror(const std::string& device, std::size_t capacity, bool priority);
     ~Mirror();
 
+    void configure(int local_tty, std::optional<speed_t> baud);
     int fd() const { return fd_.get(); }
     bool queued() const { return !pending_.empty(); }
     bool priority() const { return priority_; }

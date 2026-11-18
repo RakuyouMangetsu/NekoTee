@@ -66,7 +66,7 @@ int relay(Terminal& terminal, Session& session, const Signals& signals, Mirror& 
         const auto current = terminal.size();
         session.resize(current);
         if (mirror.fd() >= 0) {
-            mirror.offer(transcript.resize(current.ws_row, current.ws_col));
+            transcript.resize(current.ws_row, current.ws_col);
         }
     };
 

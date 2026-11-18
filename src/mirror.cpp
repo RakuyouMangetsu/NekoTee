@@ -27,20 +27,25 @@ speed_t serial_baud(unsigned int rate) {
     }
 }
 
-Mirror::Mirror(const std::string& device, int local_tty, std::optional<speed_t> baud,
-               std::size_t capacity, bool priority)
+Mirror::Mirror(const std::string& device, std::size_t capacity, bool priority)
     : pending_(capacity), priority_(priority) {
     fd_.reset(open(device.c_str(), O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC));
     if (fd() < 0) {
-        throw std::system_error(errno, std::generic_category(), "open mirror device " + device);
+        const int error = errno;
+        throw std::system_error(error, std::generic_category(), "open mirror device '" + device + "'");
     }
     unsigned int pty_number = 0;
     if (ioctl(fd(), TIOCGPTN, &pty_number) == 0) {
         throw std::invalid_argument("mirror must be an existing tty or PTY slave, not ptmx");
     }
     if (tcgetattr(fd(), &original_) < 0) {
-        throw os_error("read mirror device settings (the mirror must be a tty)");
+        const int error = errno;
+        throw std::system_error(error, std::generic_category(),
+                                "read terminal settings for mirror device '" + device + "'");
     }
+}
+
+void Mirror::configure(int local_tty, std::optional<speed_t> baud) {
     if (same_tty(local_tty, fd())) {
         throw std::invalid_argument("mirror device must not be the current terminal");
     }

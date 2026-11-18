@@ -9,6 +9,7 @@ namespace {
 
 int rows_for(int rows) { return std::clamp(rows == 0 ? 24 : rows, 2, 512); }
 int columns_for(int cols) { return std::clamp(cols == 0 ? 80 : cols, 2, 512); }
+constexpr std::size_t max_wrapped_prefix = 64 * 1024;
 
 bool visible_codepoint(std::uint32_t ch) {
     return ch >= 0x20 && (ch < 0x7F || ch > 0x9F) && ch <= 0x10FFFF &&
@@ -29,8 +30,7 @@ void utf8(std::string& text, std::uint32_t ch) {
 }
 
 template <class ReadCell>
-std::string visible_row(int columns, ReadCell read) {
-    std::string text;
+void append_visible_row(std::string& text, int columns, ReadCell read) {
     std::size_t blanks = 0;
     for (int col = 0; col < columns; ++col) {
         const auto cell = read(col);
@@ -39,7 +39,7 @@ std::string visible_row(int columns, ReadCell read) {
             continue;
         }
         if (cell.attrs.conceal || !visible_codepoint(cell.chars[0])) {
-            ++blanks;
+            blanks += std::max(1, static_cast<int>(cell.width));
             continue;
         }
         text.append(blanks, ' ');
@@ -53,7 +53,6 @@ std::string visible_row(int columns, ReadCell read) {
             }
         }
     }
-    return text;
 }
 
 } // namespace
@@ -61,7 +60,7 @@ std::string visible_row(int columns, ReadCell read) {
 Transcript::Transcript(int rows, int columns)
     : vterm_(vterm_new(rows_for(rows), columns_for(columns)), vterm_free),
       screen_(vterm_obtain_screen(vterm_.get())), state_(vterm_obtain_state(vterm_.get())),
-      primary_(rows_for(rows)), alternate_(primary_.size()), columns_(columns_for(columns)) {
+      columns_(columns_for(columns)) {
     static constexpr VTermScreenCallbacks callbacks{
         damage, move, nullptr, property, nullptr, nullptr, scrollback, nullptr, nullptr};
     vterm_set_utf8(vterm_.get(), 1);
@@ -72,31 +71,33 @@ Transcript::Transcript(int rows, int columns)
 }
 
 std::string Transcript::feed(std::string_view bytes) {
-    // Take snapshots before line feeds so even lines that scroll away in one
-    // read are transcribed. VTerm keeps partial escape and UTF-8 state.
+    std::string output;
     for (auto newline = bytes.find('\n'); newline != std::string_view::npos;
          newline = bytes.find('\n')) {
         input(bytes.substr(0, newline));
-        publish();
         VTermPos before{}, after{};
         vterm_state_get_cursorpos(state_, &before);
-        const bool blank = active()[before.row].text.empty();
-        const auto previous_scroll = scroll_events_;
+
+        // Capture the line before LF can scroll it away. Edits and suggestions
+        // only affect the screen model until a line feed reaches the terminal.
+        const auto start = output.size();
+        append_line(output, before.row);
+        screen_changed_ = false;
+        line_feed_ = true;
         input(bytes.substr(newline, 1));
+        line_feed_ = false;
         vterm_state_get_cursorpos(state_, &after);
-        if (after.row != before.row || previous_scroll != scroll_events_) {
-            if (blank) {
-                close_line();
-                output_ += "\r\n";
-            } else if (open_row_ != after.row) {
-                close_line();
-            }
+        if (after.row != before.row || screen_changed_) {
+            output += "\r\n";
+            clear_wrapped_prefix();
+        } else {
+            // For example, libvterm ignores LF inside an SOS control string.
+            output.resize(start);
         }
         bytes.remove_prefix(newline + 1);
     }
     input(bytes);
-    publish();
-    return std::exchange(output_, {});
+    return output;
 }
 
 void Transcript::input(std::string_view bytes) {
@@ -105,137 +106,90 @@ void Transcript::input(std::string_view bytes) {
     }
 }
 
-std::string Transcript::resize(int rows, int columns) {
+void Transcript::resize(int rows, int columns) {
+    int old_rows = 0;
+    vterm_get_size(vterm_.get(), &old_rows, nullptr);
     rows = rows_for(rows);
     columns = columns_for(columns);
-    if (rows == static_cast<int>(primary_.size()) && columns == columns_) {
-        return {};
+    if (rows != old_rows || columns != columns_) {
+        clear_wrapped_prefix();
+        resizing_ = true;
+        vterm_set_size(vterm_.get(), rows, columns);
+        resizing_ = false;
+        columns_ = columns;
     }
-    publish();
-    resizing_ = true;
-    vterm_set_size(vterm_.get(), rows, columns);
-    resizing_ = false;
-    columns_ = columns;
-    primary_.resize(rows);
-    alternate_.resize(rows);
-    damage({0, rows, 0, columns}, this);
-    publish();
-    return std::exchange(output_, {});
 }
 
 int Transcript::damage(VTermRect rect, void* user) {
     auto& self = *static_cast<Transcript*>(user);
-    if (!self.resizing_) {
-        auto& rows = self.active();
-        const int end = std::min(rect.end_row, static_cast<int>(rows.size()));
-        for (int row = std::max(0, rect.start_row); row < end; ++row) {
-            rows[row].dirty = true;
-        }
+    self.screen_changed_ = true;
+    if (rect.start_row == 0 && rect.start_col == 0 && rect.end_col == self.columns_) {
+        self.clear_wrapped_prefix();
     }
     return 1;
 }
 
 int Transcript::move(VTermRect dest, VTermRect src, void* user) {
     auto& self = *static_cast<Transcript*>(user);
-    self.scroll_index_ = 0;
-    if (self.resizing_) {
-        return 1;
-    }
-    if (dest.start_col != 0 || src.start_col != 0 || dest.end_col != self.columns_ ||
-        src.end_col != self.columns_ || dest.start_row == src.start_row) {
-        return damage(dest, user);
-    }
-
-    // Keep the reported text attached to the physical row as it scrolls.
-    auto& rows = self.active();
-    if (self.open_row_ >= src.start_row && self.open_row_ < src.end_row) {
-        self.open_row_ += dest.start_row - src.start_row;
-    } else if (self.open_row_ >= dest.start_row && self.open_row_ < dest.end_row) {
-        self.close_line();
-    }
-    if (dest.start_row < src.start_row) {
-        std::move(rows.begin() + src.start_row, rows.begin() + src.end_row,
-                  rows.begin() + dest.start_row);
-    } else {
-        std::move_backward(rows.begin() + src.start_row, rows.begin() + src.end_row,
-                           rows.begin() + dest.end_row);
-    }
-    for (int row = src.start_row; row < src.end_row; ++row) {
-        if (row < dest.start_row || row >= dest.end_row) {
-            rows[row] = {};
+    if (dest.start_row != src.start_row && (dest.start_row == 0 || src.start_row == 0)) {
+        if (dest.start_row == 0 && src.start_row == 1 && self.scrolled_row_) {
+            if (!self.scrolled_row_->empty()) {
+                self.wrapped_prefix_bytes_ += self.scrolled_row_->size();
+                self.wrapped_prefix_.push_back(std::move(*self.scrolled_row_));
+                while (self.wrapped_prefix_bytes_ > max_wrapped_prefix) {
+                    self.wrapped_prefix_bytes_ -= self.wrapped_prefix_.front().size();
+                    self.wrapped_prefix_.pop_front();
+                }
+            }
+        } else {
+            self.clear_wrapped_prefix();
         }
     }
-    ++self.scroll_events_;
+    self.scrolled_row_.reset();
     return 1;
 }
 
-int Transcript::property(VTermProp prop, VTermValue* value, void* user) {
-    auto& self = *static_cast<Transcript*>(user);
-    if (prop == VTERM_PROP_ALTSCREEN && self.alternate_active_ != (value->boolean != 0)) {
-        self.close_line();
-        self.alternate_active_ = value->boolean != 0;
-        auto& rows = self.active();
-        if (self.alternate_active_) {
-            std::fill(rows.begin(), rows.end(), Row{});
-        }
-        damage({0, static_cast<int>(rows.size()), 0, self.columns_}, user);
+int Transcript::property(VTermProp prop, VTermValue*, void* user) {
+    if (prop == VTERM_PROP_ALTSCREEN) {
+        static_cast<Transcript*>(user)->clear_wrapped_prefix();
     }
     return 1;
 }
 
 int Transcript::scrollback(int columns, const VTermScreenCell* cells, void* user) {
     auto& self = *static_cast<Transcript*>(user);
-    if (!self.resizing_ && self.scroll_index_ < static_cast<int>(self.active().size())) {
-        self.publish_row(self.scroll_index_++,
-                         visible_row(columns, [cells](int col) { return cells[col]; }), true);
+    self.scrolled_row_.reset();
+    // The state layer has moved the wrap flags, but the screen is still
+    // reporting the old row. A continued new top row needs the evicted text.
+    if (!self.line_feed_ && !self.resizing_ &&
+        vterm_state_get_lineinfo(self.state_, 0)->continuation) {
+        append_visible_row(self.scrolled_row_.emplace(), columns, [cells](int col) { return cells[col]; });
     }
     return 1;
 }
 
-void Transcript::publish() {
-    VTermPos cursor{};
-    vterm_state_get_cursorpos(state_, &cursor);
-    if (open_row_ >= 0 && open_row_ != cursor.row) {
-        close_line();
-    }
-    auto& rows = active();
-    for (int row = 0; row < static_cast<int>(rows.size()); ++row) {
-        if (std::exchange(rows[row].dirty, false)) {
-            auto text = visible_row(columns_, [this, row](int col) {
-                VTermScreenCell cell{};
-                vterm_screen_get_cell(screen_, {row, col}, &cell);
-                return cell;
-            });
-            publish_row(row, std::move(text), row != cursor.row);
-        }
-    }
+void Transcript::clear_wrapped_prefix() {
+    wrapped_prefix_.clear();
+    wrapped_prefix_bytes_ = 0;
+    scrolled_row_.reset();
 }
 
-void Transcript::publish_row(int row, std::string text, bool complete) {
-    auto& previous = active()[row].text;
-    if (text != previous) {
-        if (text.empty()) {
-            if (open_row_ == row) {
-                close_line();
-            }
-        } else if (open_row_ == row && text.compare(0, previous.size(), previous) == 0) {
-            output_.append(text, previous.size(), std::string::npos);
-        } else {
-            close_line();
-            output_ += text;
-            open_row_ = row;
+void Transcript::append_line(std::string& output, int last_row) const {
+    int first_row = last_row;
+    while (first_row > 0 && vterm_state_get_lineinfo(state_, first_row)->continuation) {
+        --first_row;
+    }
+    if (first_row == 0 && vterm_state_get_lineinfo(state_, 0)->continuation) {
+        for (const auto& row : wrapped_prefix_) {
+            output += row;
         }
-        previous = std::move(text);
     }
-    if (complete && open_row_ == row) {
-        close_line();
-    }
-}
-
-void Transcript::close_line() {
-    if (open_row_ >= 0) {
-        output_ += "\r\n";
-        open_row_ = -1;
+    for (int row = first_row; row <= last_row; ++row) {
+        append_visible_row(output, columns_, [this, row](int col) {
+            VTermScreenCell cell{};
+            vterm_screen_get_cell(screen_, {row, col}, &cell);
+            return cell;
+        });
     }
 }
 
