@@ -29,11 +29,6 @@ bool use_chinese() {
     return false;
 }
 
-void session_start_message() {
-    std::cerr << (use_chinese() ? "[nekotee] PTY 会话已启动。输入 exit 返回原 shell。\n"
-                               : "[nekotee] PTY session started. Type exit to return.\n");
-}
-
 void session_end_message(int status) {
     if (use_chinese()) {
         std::cerr << "\n[nekotee] PTY 会话已结束，退出码 " << status << "。\n";
@@ -45,52 +40,84 @@ void session_end_message(int status) {
 void help() {
     std::cout << (use_chinese() ? R"HELP(用法：nekotee --mirror DEVICE [选项]
 
-  --mirror DEVICE       镜像目标：现有 tty、PTY 从端、ttyS、ttyUSB 或 ttyACM
-  --shell PATH          覆盖当前账户配置的 shell；未配置时使用 /bin/sh
-  --baud RATE           设置串口速率及 8N1（不启用软、硬件流控）
-  --buffer-kbytes [N]    启用镜像缓冲，默认 128 kbytes；1 kbyte = 1024 字节
-                        也可用 --buffer-kbytes=N，范围 0 到 65536
-  --mirror-priority     镜像优先；未指定大小时启用 128 kbytes 缓冲
-  -h, --help            显示帮助，不启动会话
+  选项              | 默认值       | 说明
+  ------------------+--------------+-----------------------------------------------
+  --mirror DEVICE   | 必填         | 另一 tty、PTY 从端或串口；soft 也需读权限
+  --shell PATH      | 账户 shell   | 指定 shell 路径；账户未配置时用 /bin/sh
+  --baud RATE       | 设备原设置   | 十进制波特率，不带单位，如 115200
+  --frame FORMAT    | 设备原设置*  | 如 8N1 或 7E1；数据位 5–8、校验 N/E/O、
+                    |              | 停止位 1 或 2，N/E/O 分别为无/偶/奇校验
+  --buffer [N]      | 128 kbytes   | 待发队列；0–65536，1 kbyte = 1024 字节
+                    |              | 不带 N 使用 128；也可写 --buffer=N
+  --wait MS         | 500 ms       | PTY 退出后的队列等待时间；0 不等，-1 不限时
+  --limit           | 关闭         | 按串口速率和队列余量限制原端；要求 --buffer > 0
+  --flow soft|hard  | 见下方*      | 镜像串口握手：soft 为 XON/XOFF，hard 为 RTS/CTS
+  --resume PCT      | 50%          | --limit 的恢复水位（0–99，不带 %）
+  -h, --help        |              | 显示帮助，不启动会话；无参数同理
+
+* 指定 --baud 但不指定 --frame 时用 8N1。未指定 --flow 时：有 --limit 则用
+  soft；否则，指定 --baud 时关闭串口流控，未指定 --baud 时保留设备设置。
+  支持的波特率：1200 2400 4800 9600 19200 38400 57600 115200
+                230400 460800 500000 576000 921600 1000000
 
 工作机制：
-  当前窗口接入一个新 PTY，运行交互 shell。输入只发给该 shell；镜像设备只写不读。
-  镜像在 PTY 输出 LF 时发送该行当时的可见内容（UTF-8 纯文本，以 CRLF 结尾）。
-  提示符和命令一起逐行发送。退格、补全及仅用 CR 的重绘只更新待发送的行。
-  本地会话即时显示。未到 LF 的行不会发送，退出时也是如此。
-  不发送原始按键、关闭回显的输入、样式或控制序列。主动打印的敏感文字仍会镜像。
-  移动光标和清屏不会在镜像端重演；全屏应用显示为文本转录，不是画面复制。
-  默认发送缓冲为 0：有完整行就立即尝试写镜像，写不进就丢弃。
-  启用缓冲后满时丢最旧的字节。镜像优先时，缓冲到 75% 暂停读取 PTY 输出，
-  降到 50% 再继续。缓冲填满时仍丢最旧的数据。输入 exit 返回原 shell。
+  会话：复用当前终端窗口，在新 PTY 中运行 shell。启动时显示实际配置，目标无效则报错。
+        结束时输入 exit 返回；镜像端不能给 shell 发送输入。程序提示不会镜像。
+  取样：LF 真正换行时，提取光标所在行的可见文字（含提示符、命令，合并自动折行），
+        输出 UTF-8 和 CRLF。不复制换行前清除的内容、原始按键、无回显输入、样式、
+        控制序列或未换行的末行。主动打印的敏感文字仍可能出现。
+  发送：无积压立即尝试写入。默认队列放不下时丢最旧的字节，不暂停原端；
+        --buffer 0 不排队，写不进的字节直接丢弃。
+  限速：开启 --limit 后，队列越满越慢，满 100% 才暂停读取 PTY，降到恢复水位
+        后继续；暂停时显示还需处理的字节数。--flow 只设置镜像串口的握手，
+        soft 响应对端 XOFF/XON，hard 需要接通 RTS/CTS，PTY 本身没有这些引脚。
+  退出：显示剩余待发字节；--wait 到时丢弃剩余数据，也可按 Ctrl-C 取消等待。
+        正常退出保留 shell 的退出码。待发字节不包括驱动已接受的数据，
+        写入成功不代表远端已收到。
 
-示例：nekotee --mirror /dev/ttyUSB0 --baud 115200 --mirror-priority
+示例：nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1 --limit --wait -1
 )HELP" : R"HELP(Usage: nekotee --mirror DEVICE [OPTIONS]
 
-  --mirror DEVICE       Existing tty, PTY slave, ttyS, ttyUSB or ttyACM
-  --shell PATH          Override the account shell (fallback: /bin/sh)
-  --baud RATE           Set serial baud rate and 8N1 with no serial flow control
-  --buffer-kbytes [N]    Enable the mirror buffer (default size: 128 kbytes)
-                        Also accepts --buffer-kbytes=N; 0 to 65536, 1024 bytes each
-  --mirror-priority     Throttle PTY output for the mirror; default buffer: 128 kbytes
-  -h, --help            Show help without starting a session
+  Option            | Default       | Description
+  ------------------+---------------+---------------------------------------------
+  --mirror DEVICE   | required      | Another tty, PTY slave, or serial port
+                    |               | Soft flow also needs read permission
+  --shell PATH      | account shell | Shell path (fallback: /bin/sh)
+  --baud RATE       | device        | Decimal baud rate without a unit, e.g. 115200
+  --frame FORMAT    | device*       | E.g. 8N1 or 7E1: 5-8 data bits, N/E/O parity
+                    |               | (none/even/odd), 1 or 2 stop bits
+  --buffer [N]      | 128 kbytes    | Send queue; 0-65536, 1 kbyte = 1024 bytes
+                    |               | No N means 128. Also: --buffer=N
+  --wait MS         | 500 ms        | Queue wait at PTY exit; 0 skips, -1 is unlimited
+  --limit           | off           | Pace PTY reads; requires a nonzero --buffer
+  --flow soft|hard  | see below*    | Mirror handshake: XON/XOFF or RTS/CTS
+  --resume PCT      | 50%           | Resume level for --limit (0-99, no % sign)
+  -h, --help        |               | Show help without a session (also with no args)
+
+* --baud without --frame uses 8N1. Without --flow, --limit selects soft;
+  otherwise --baud disables serial flow control, or the device setting is kept.
+  Supported rates: 1200 2400 4800 9600 19200 38400 57600 115200
+                   230400 460800 500000 576000 921600 1000000
 
 How it works:
-  This window connects to an interactive shell on a new PTY. Input goes only
-  to that PTY. The write-only mirror sends the visible line at each PTY LF as
-  UTF-8 text ending in CRLF. Prompts and commands are sent together. Backspaces,
-  suggestions, and CR-only redraws update the current line until it is sent.
-  Local output is immediate. Lines without LF are skipped, including at exit.
-  Raw keystrokes, no-echo input, styles, and control sequences are not copied.
-  A secret deliberately printed by an application is still visible and mirrored.
-  Cursor movement and screen clears are not replayed on the mirror; full-screen
-  applications are transcribed as text, not reproduced as a duplicate display.
-  The default send buffer is zero. Write completed lines immediately and drop
-  what the mirror cannot accept. A full buffer drops its oldest
-  bytes. Mirror priority pauses PTY reads at 75% full and resumes at 50%.
-  It still drops the oldest bytes if the buffer fills. Type exit to return.
+  Session: Run the shell in a PTY in the current window. Check the effective settings
+           at startup; an invalid destination fails before the shell starts. Type exit
+           to return. The mirror cannot send input to the shell; notices stay local.
+  Capture: On LF, send the visible text of the cursor's line (including prompts and
+           commands), joining soft wraps and ending in CRLF. No erased suggestions,
+           raw keys, no-echo input, styles, controls, or unterminated last line.
+           This is a text transcript; secrets printed by a program can still appear.
+  Sending: Try writes immediately when the queue is empty. By default a full queue
+           drops the oldest unsent bytes without pausing the PTY. With --buffer 0,
+           drop bytes that cannot be written at once.
+  Pacing:  With --limit, read more slowly as the queue fills. At 100%, pause PTY reads
+           until the resume level and report the bytes left to get there. --flow sets
+           the mirror link only: soft honors peer XOFF/XON, hard needs wired RTS/CTS.
+  Exit:    Report queued bytes, then drop any remainder at the --wait deadline.
+           Ctrl-C cancels the wait. Preserve the shell status on normal exit. Bytes
+           already accepted by the driver are not in the count or confirmed delivered.
 
-Example: nekotee --mirror /dev/ttyUSB0 --baud 115200 --mirror-priority
+Example: nekotee --mirror /dev/ttyUSB0 --baud 115200 --frame 8N1 --limit --wait -1
 )HELP");
 }
 
@@ -98,10 +125,54 @@ struct Options {
     std::string device;
     std::string shell;
     std::optional<speed_t> baud;
-    std::optional<unsigned int> buffer;
-    bool priority = false;
+    std::optional<tcflag_t> frame;
+    std::optional<neko::Flow> flow;
+    neko::RelayOptions relay;
+    unsigned int buffer = default_buffer;
     bool show_help = false;
 };
+
+void session_start_message(const Options& options, const std::string& shell,
+                           const neko::Mirror& mirror) {
+    const bool zh = options.relay.chinese;
+    const auto& settings = mirror.settings();
+    const auto baud = neko::baud_rate(cfgetospeed(&settings));
+    std::cerr << (zh ? "[nekotee] PTY 会话已启动。输入 exit 返回原 shell。\n"
+                     : "[nekotee] PTY session started. Type exit to return.\n")
+              << (zh ? "  镜像：" : "  Mirror: ") << options.device
+              << (zh ? "；Shell：" : "; shell: ") << shell << '\n'
+              << (zh ? "  串口：" : "  Link: ")
+              << (baud ? std::to_string(*baud) : zh ? "未知" : "unknown")
+              << " baud, " << neko::format_serial_frame(settings.c_cflag) << "; ";
+    const bool hard = settings.c_cflag & CRTSCTS;
+    const bool send = settings.c_iflag & IXON;
+    const bool receive = settings.c_iflag & IXOFF;
+    if (hard) {
+        std::cerr << "RTS/CTS" << ((send || receive) ? " + " : "");
+    }
+    if (mirror.software_flow()) {
+        std::cerr << (zh ? "XON/XOFF (发送，程序处理)" : "XON/XOFF (TX, user space)");
+    } else if (send || receive) {
+        std::cerr << "XON/XOFF (" << (send && receive ? "TX/RX" : send ? "TX" : "RX") << ')';
+    } else if (!hard) {
+        std::cerr << (zh ? "无串口流控" : "no serial flow control");
+    }
+    std::cerr << '\n' << (zh ? "  队列：" : "  Queue: ") << options.buffer << " KiB"
+              << (zh ? "；退出等待：" : "; exit wait: ");
+    if (options.relay.wait) {
+        std::cerr << options.relay.wait->count() << " ms";
+    } else {
+        std::cerr << (zh ? "不限时" : "unlimited");
+    }
+    std::cerr << '\n' << (zh ? "  原端限速：" : "  PTY pacing: ");
+    if (options.relay.limit) {
+        std::cerr << (zh ? "开启，100% 暂停，" : "on, pause at 100%, resume at ")
+                  << options.relay.resume_percent << '%' << (zh ? " 恢复" : "");
+    } else {
+        std::cerr << (zh ? "关闭" : "off");
+    }
+    std::cerr << '\n';
+}
 
 unsigned int parse_number(std::string_view text, const char* option) {
     unsigned int value = 0;
@@ -112,13 +183,23 @@ unsigned int parse_number(std::string_view text, const char* option) {
     return value;
 }
 
+std::optional<std::chrono::milliseconds> parse_wait(std::string_view text) {
+    int value = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value < -1) {
+        throw std::invalid_argument("--wait requires -1 or an integer from 0 to 2147483647 ms");
+    }
+    return value == -1 ? std::nullopt : std::optional{std::chrono::milliseconds{value}};
+}
+
 Options parse(int argc, char** argv) {
+    constexpr std::string_view buffer_value_prefix = "--buffer=";
     Options options;
     options.show_help = argc == 1;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
-        auto value = [&]() -> std::string_view {
-            if (i + 1 >= argc || std::string_view(argv[i + 1]).substr(0, 1) == "-") {
+        auto value = [&](bool signed_number = false) -> std::string_view {
+            if (i + 1 >= argc || (!signed_number && argv[i + 1][0] == '-')) {
                 throw std::invalid_argument(std::string(arg) + " requires a value");
             }
             return argv[++i];
@@ -132,22 +213,45 @@ Options parse(int argc, char** argv) {
             options.shell = value();
         } else if (arg == "--baud") {
             options.baud = neko::serial_baud(parse_number(value(), "--baud"));
-        } else if (arg == "--mirror-priority") {
-            options.priority = true;
-        } else if (arg == "--buffer-kbytes") {
+        } else if (arg == "--frame") {
+            options.frame = neko::serial_frame(value());
+        } else if (arg == "--wait") {
+            options.relay.wait = parse_wait(value(true));
+        } else if (arg == "--limit") {
+            options.relay.limit = true;
+        } else if (arg == "--flow") {
+            const auto flow = value();
+            if (flow == "soft") {
+                options.flow = neko::Flow::soft;
+            } else if (flow == "hard") {
+                options.flow = neko::Flow::hard;
+            } else {
+                throw std::invalid_argument("--flow must be soft or hard");
+            }
+        } else if (arg == "--resume") {
+            options.relay.resume_percent = parse_number(value(), "--resume");
+            if (options.relay.resume_percent >= 100) {
+                throw std::invalid_argument("--resume must be between 0 and 99");
+            }
+        } else if (arg == "--buffer") {
             options.buffer = i + 1 < argc && std::string_view(argv[i + 1]).substr(0, 1) != "-"
-                                 ? parse_number(argv[++i], "--buffer-kbytes") : default_buffer;
-        } else if (arg.substr(0, 16) == "--buffer-kbytes=") {
-            options.buffer = parse_number(arg.substr(16), "--buffer-kbytes");
+                                 ? parse_number(argv[++i], "--buffer") : default_buffer;
+        } else if (arg.substr(0, buffer_value_prefix.size()) == buffer_value_prefix) {
+            options.buffer = parse_number(arg.substr(buffer_value_prefix.size()), "--buffer");
         } else {
             throw std::invalid_argument("unknown option: " + std::string(arg));
         }
     }
-    if (options.buffer && *options.buffer > max_buffer) {
-        throw std::invalid_argument("--buffer-kbytes must not exceed 65536");
+    if (options.buffer > max_buffer) {
+        throw std::invalid_argument("--buffer must not exceed 65536");
     }
-    if (options.priority && options.buffer == 0) {
-        throw std::invalid_argument("--mirror-priority needs a nonzero mirror buffer");
+    if (options.relay.limit) {
+        if (options.buffer == 0) {
+            throw std::invalid_argument("--limit requires a nonzero --buffer");
+        }
+        if (!options.flow) {
+            options.flow = neko::Flow::soft;
+        }
     }
     if (!options.show_help && options.device.empty()) {
         throw std::invalid_argument("--mirror DEVICE is required");
@@ -169,22 +273,22 @@ int main(int argc, char** argv) {
         help();
         return 0;
     }
+    options.relay.chinese = use_chinese();
 
     bool started = false;
     try {
-        const auto capacity = options.buffer.value_or(options.priority ? default_buffer : 0) *
-                              std::size_t{1024};
+        const auto capacity = options.buffer * std::size_t{1024};
         const neko::Signals signals;
-        neko::Mirror mirror(options.device, capacity, options.priority);
+        neko::Mirror mirror(options.device, capacity, options.flow);
         neko::Terminal terminal;
-        mirror.configure(terminal.fd(), options.baud);
+        mirror.configure(terminal.fd(), options.baud, options.frame);
         const auto shell = options.shell.empty() ? neko::default_shell() : options.shell;
         int status;
         {
             neko::Session session(shell, terminal.settings(), terminal.size(), signals);
             started = true;
-            session_start_message();
-            status = neko::relay(terminal, session, signals, mirror);
+            session_start_message(options, shell, mirror);
+            status = neko::relay(terminal, session, signals, mirror, options.relay);
             terminal.restore();
         }
         if (mirror.error()) {
@@ -193,9 +297,6 @@ int main(int argc, char** argv) {
         }
         if (mirror.dropped()) {
             std::cerr << "nekotee: dropped " << mirror.dropped() << " mirror bytes\n";
-        }
-        if (status == 0 && mirror.priority() && (mirror.error() || mirror.dropped())) {
-            status = 1;
         }
         session_end_message(status);
         return status;
